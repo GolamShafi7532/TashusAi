@@ -1,0 +1,293 @@
+{
+  "ai_admin_users": [
+    {
+      "id": "local-1784007970747-c9ckbh",
+      "created_at": "2026-07-14T05:46:10.747Z",
+      "updated_at": "2026-07-14T05:46:10.747Z",
+      "email": "test5@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$artK8iRIApoc5o/Q3sx9Bw$y4blAs8Z6gAxmPCNlsAqcFSDKahmldogAjdPjDQILRg",
+      "display_name": "test5",
+      "role": "agent",
+      "is_active": true,
+      "last_login_at": "2026-07-14T05:46:10.747Z"
+    },
+    {
+      "id": "local-1784009998633-dwfud5",
+      "created_at": "2026-07-14T06:19:58.633Z",
+      "updated_at": "2026-07-14T06:27:32.393Z",
+      "email": "golam.shafi.bd@gmail.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$8g61eSSuUi4OgQ7DdLxJjA$rId5yB07d2JH8E1fa7GpxzBSCxRaLSlupd8LbqYHzyE",
+      "display_name": "qwd",
+      "role": "agent",
+      "is_active": true,
+      "last_login_at": "2026-07-14T06:27:32.393Z"
+    },
+    {
+      "id": "local-1784012024973-b1d5dd",
+      "created_at": "2026-07-14T06:53:44.973Z",
+      "updated_at": "2026-07-14T06:53:44.973Z",
+      "email": "local-test@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$zdMC1M5RcSIEIcIM1puJxA$DXWjd2q651uVNqFfqmvx236LbStbfEkL23W+XNDUmi8",
+      "display_name": "Local Test",
+      "role": "agent",
+      "is_active": true,
+      "last_login_at": "2026-07-14T06:53:44.973Z"
+    },
+    {
+      "id": "local-1784012662331-qfjg95",
+      "created_at": "2026-07-14T07:04:22.331Z",
+      "updated_at": "2026-07-14T07:04:22.335Z",
+      "email": "config-save-check@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$Oxa/ZC5tbWlBPbSVu06Zlw$VsoZU7CBYE8zyHS30fjko5+Hbjpyv+/Xa41rDwNcq6I",
+      "display_name": "Config Saver",
+      "role": "admin",
+      "is_active": true,
+      "last_login_at": "2026-07-14T07:04:22.332Z"
+    },
+    {
+      "id": "local-1784016239352-sqoz5c",
+      "created_at": "2026-07-14T08:03:59.352Z",
+      "updated_at": "2026-07-14T08:03:59.352Z",
+      "email": "debug-admin@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$vKtcvcsLy2H409NTXGHGSQ$e/66FHTQ0uynnz45GeRW/vfURjYyqx8RsY0XijM6TVM",
+      "display_name": "Debug Admin",
+      "role": "admin",
+      "is_active": true
+    },
+    {
+      "id": "local-1784016375018-bsrryn",
+      "created_at": "2026-07-14T08:06:15.018Z",
+      "updated_at": "2026-07-14T08:06:15.018Z",
+      "email": "config-fix-check@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$otAAdRKgoOJwbSVh65bkxg$OQxeZzkGONQPgS39Cqm52C4ZZ8QDbMj1aOs7Y/b+2lI",
+      "display_name": "Config Fix",
+      "role": "admin",
+      "is_active": true
+    },
+    {
+      "id": "local-1784027658999-twvpk7",
+      "created_at": "2026-07-14T11:14:18.999Z",
+      "updated_at": "2026-07-14T11:14:18.999Z",
+      "email": "temp-admin@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$2dMLWT4S7mtg19y5LuwJkg$attoz4m9jPrJ7VsxZKtyKPK4JEkX0hIeyY3Vq1+Gcb4",
+      "display_name": "Temp Admin",
+      "role": "admin",
+      "is_active": true
+    },
+    {
+      "id": "local-1784028532297-b98vwl",
+      "created_at": "2026-07-14T11:28:52.297Z",
+      "updated_at": "2026-07-14T11:28:52.297Z",
+      "email": "new-admin@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$KcjyXeC8P+q3Gl4kMHgHzA$GkO3MyTSNjCxlJU7KQBIJTcXax2Y0COqqF/KGnLBZYs",
+      "display_name": "New Admin",
+      "role": "admin",
+      "is_active": true
+    },
+    {
+      "id": "local-1784028561758-67tc61",
+      "created_at": "2026-07-14T11:29:21.758Z",
+      "updated_at": "2026-07-14T11:29:21.759Z",
+      "email": "new-admin-test@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$1yyvmeSpN10lgC4px0ecfQ$f1mzKBzsguduc0pfAUsyn2OXgVJoRVk1JS0u3T8ED9I",
+      "display_name": "New Admin Test",
+      "role": "admin",
+      "is_active": true
+    },
+    {
+      "id": "local-1784028582678-rw8feh",
+      "created_at": "2026-07-14T11:29:42.678Z",
+      "updated_at": "2026-07-14T11:29:42.678Z",
+      "email": "new-admin-test-env@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$dBM0oXjKSnTmruFoOcsUtA$ztXkJhXwPGd+j8J5g6IP1wxlFFN7WAjDCP5oj8pBC3I",
+      "display_name": "New Admin Test Env",
+      "role": "admin",
+      "is_active": true
+    },
+    {
+      "id": "local-1784028641227-4gjoih",
+      "created_at": "2026-07-14T11:30:41.227Z",
+      "updated_at": "2026-07-14T11:30:41.227Z",
+      "email": "another-new-admin@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$zlb9KI862G7eYIt/GNco1A$SfciCfNHT6NObcm6MUsWqY0N9JAZnT5NmSgydjt+Ugg",
+      "display_name": "Another Admin",
+      "role": "admin",
+      "is_active": true
+    },
+    {
+      "id": "local-1784028725870-5s755a",
+      "created_at": "2026-07-14T11:32:05.870Z",
+      "updated_at": "2026-07-14T11:32:05.870Z",
+      "email": "another-new-admin-2@example.com",
+      "password_hash": "$argon2id$v=19$m=65536,t=3,p=4$DF23ZtI1em0RM1bfxcrTIA$oSnwfOogj3yF5qcUihtECg9bC0VojaPNsRn7zKO5Opk",
+      "display_name": "Another Admin 2",
+      "role": "admin",
+      "is_active": true
+    }
+  ],
+  "ai_admin_sessions": [
+    {
+      "id": "local-1784007970749-t933q4",
+      "created_at": "2026-07-14T05:46:10.749Z",
+      "updated_at": "2026-07-14T06:01:10.196Z",
+      "admin_user_id": "local-1784007970747-c9ckbh",
+      "refresh_token_hash": "1679218b550df242ea7ca3a219693c1a45108df48ff488029fa0fe3fb2d36504",
+      "user_agent": "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+      "ip_address": "::1",
+      "expires_at": "2026-07-21T06:01:10.196Z"
+    },
+    {
+      "id": "local-1784009998639-7w6sjl",
+      "created_at": "2026-07-14T06:19:58.639Z",
+      "updated_at": "2026-07-14T06:19:58.639Z",
+      "admin_user_id": "local-1784009998633-dwfud5",
+      "refresh_token_hash": "8e4aafe7f65cd5d5e8bf90ff664eb131993368871e45a1b3f852efd9ecc5e501",
+      "user_agent": "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+      "ip_address": "::1",
+      "expires_at": "2026-07-21T06:19:58.639Z"
+    },
+    {
+      "id": "local-1784010452395-5gadsv",
+      "created_at": "2026-07-14T06:27:32.395Z",
+      "updated_at": "2026-07-14T06:51:14.429Z",
+      "admin_user_id": "local-1784009998633-dwfud5",
+      "refresh_token_hash": "4304fd5ce5a9cedcff9c4b025baadcbbb5bdc55105b911ae2fdd97825a4355e0",
+      "user_agent": "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+      "ip_address": "127.0.0.1",
+      "expires_at": "2026-07-21T06:51:14.429Z"
+    },
+    {
+      "id": "local-1784012024975-ngm1te",
+      "created_at": "2026-07-14T06:53:44.975Z",
+      "updated_at": "2026-07-14T06:53:44.975Z",
+      "admin_user_id": "local-1784012024973-b1d5dd",
+      "refresh_token_hash": "de150b6b40a8fa1aab68aa60b26b39b0865c960012da4de3099050bdf8d461fa",
+      "user_agent": "curl/8.7.1",
+      "ip_address": "127.0.0.1",
+      "expires_at": "2026-07-21T06:53:44.975Z"
+    },
+    {
+      "id": "local-1784012662348-sqaej9",
+      "created_at": "2026-07-14T07:04:22.348Z",
+      "updated_at": "2026-07-14T07:04:22.348Z",
+      "admin_user_id": "local-1784012662331-qfjg95",
+      "refresh_token_hash": "1941d0245b93f21841062c1d1aa89c9c4c392db25bb8b892820c317f25ec9f0b",
+      "user_agent": "curl/8.7.1",
+      "ip_address": "127.0.0.1",
+      "expires_at": "2026-07-21T07:04:22.347Z"
+    },
+    {
+      "id": "local-1784016239357-d88xyo",
+      "created_at": "2026-07-14T08:03:59.357Z",
+      "updated_at": "2026-07-14T08:03:59.357Z",
+      "admin_user_id": "local-1784016239352-sqoz5c",
+      "refresh_token_hash": "1bafc9d8243bab9c78f75fb987576f929139fd2730cbe10490106e4b23adce29",
+      "user_agent": "curl/8.7.1",
+      "ip_address": "::1",
+      "expires_at": "2026-07-21T08:03:59.357Z"
+    },
+    {
+      "id": "local-1784016375094-ffy86t",
+      "created_at": "2026-07-14T08:06:15.094Z",
+      "updated_at": "2026-07-14T08:06:15.094Z",
+      "admin_user_id": "local-1784016375018-bsrryn",
+      "refresh_token_hash": "993018927b2b769e4a9e3bba46ac9b60dc59f50dd4afcb23c9e8eede40e3820c",
+      "user_agent": "curl/8.7.1",
+      "ip_address": "::1",
+      "expires_at": "2026-07-21T08:06:15.058Z"
+    },
+    {
+      "id": "local-1784028551603-iu9t17",
+      "created_at": "2026-07-14T11:29:11.603Z",
+      "updated_at": "2026-07-14T11:29:11.603Z",
+      "admin_user_id": "local-1784007970747-c9ckbh",
+      "refresh_token_hash": "ccda93995270284dce69c19f84c5bdbb611dbb55759174e08e3f3c28ef525941",
+      "user_agent": "test",
+      "ip_address": "127.0.0.1",
+      "expires_at": "2026-07-21T11:29:11.602Z"
+    },
+    {
+      "id": "local-1784028561763-34tjui",
+      "created_at": "2026-07-14T11:29:21.763Z",
+      "updated_at": "2026-07-14T11:29:21.763Z",
+      "admin_user_id": "local-1784028561758-67tc61",
+      "refresh_token_hash": "59dc20230f40830e6dc961e017fb7433ff3e1b4b2345658144715042888a691f",
+      "user_agent": "test",
+      "ip_address": "127.0.0.1",
+      "expires_at": "2026-07-21T11:29:21.762Z"
+    },
+    {
+      "id": "local-1784028582683-dg0u3y",
+      "created_at": "2026-07-14T11:29:42.683Z",
+      "updated_at": "2026-07-14T11:29:42.683Z",
+      "admin_user_id": "local-1784028582678-rw8feh",
+      "refresh_token_hash": "f38ed779dbb1d5dcefe107772f672d017dba9f812161ba539618561762a15f61",
+      "user_agent": "test",
+      "ip_address": "127.0.0.1",
+      "expires_at": "2026-07-21T11:29:42.682Z"
+    },
+    {
+      "id": "local-1784028725872-cobiid",
+      "created_at": "2026-07-14T11:32:05.872Z",
+      "updated_at": "2026-07-14T11:32:05.872Z",
+      "admin_user_id": "local-1784028725870-5s755a",
+      "refresh_token_hash": "4eef7b509f0a7ab1061f64db8d8f8ce91e8ec07fe88a4c7fbb3ce2e95027ddad",
+      "user_agent": "curl/8.7.1",
+      "ip_address": "::1",
+      "expires_at": "2026-07-21T11:32:05.872Z"
+    },
+    {
+      "id": "local-1784029364470-isqhwh",
+      "created_at": "2026-07-14T11:42:44.470Z",
+      "updated_at": "2026-07-14T11:42:44.470Z",
+      "admin_user_id": "local-1784009998633-dwfud5",
+      "refresh_token_hash": "fb77d172267d0c317e61356c72ed3c6bf6d00af3ec4e3c3ce33336001a754919",
+      "user_agent": "Mozilla/5.0 (Linux; Android 15; Pixel 9) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/150.0.0.0 Mobile Safari/537.36",
+      "ip_address": "::1",
+      "expires_at": "2026-07-21T11:42:44.470Z"
+    }
+  ],
+  "ai_chat_sessions": [],
+  "ai_chat_messages": [],
+  "ai_documents": [
+    {
+      "id": "local-1784017344574-6b8g09",
+      "created_at": "2026-07-14T08:22:24.574Z",
+      "updated_at": "2026-07-14T08:22:24.574Z",
+      "title": "rental terms",
+      "category": "general",
+      "original_filename": "rental_terms.pdf",
+      "storage_path": "local-dev/1784017344572/rental_terms.pdf",
+      "mime_type": "application/pdf",
+      "file_size_bytes": 174461,
+      "status": "ready",
+      "uploaded_by": "local-dev-admin",
+      "version": 1,
+      "is_active": true
+    }
+  ],
+  "ai_knowledge_base": [],
+  "ai_agent_configs": [
+    {
+      "id": "local-1784012662390-rafrin",
+      "created_at": "2026-07-14T07:04:22.390Z",
+      "updated_at": "2026-07-14T08:12:49.743Z",
+      "system_prompt": "# Role & Identity\nYou are the official AI Concierge for Tashus, a premium car rental platform. \nYour primary goal is to assist customers with vehicle availability, rental policies, pricing, and voucher validation. \n\n# Tone & Brand Voice\n- Be warm, professional, and concise. \n- You speak in Australian English (e.g., AUD for currency, standard AU spelling).\n- Do not use overly robotic language; be conversational but efficient. \n- Keep responses short to optimize for a fast chat UI experience. \n\n# Core Directives & Tool Usage\nYou have access to backend tools to fetch real-time data. You MUST follow these rules strictly:\n1. NEVER GUESS INVENTORY OR PRICING: If a user asks about car availability, prices, or dates, you MUST call the `check_inventory` tool. \n2. NEVER GUESS POLICIES: If a user asks about insurance, deposits, cancellation, or age limits, you MUST call the `search_policies` tool to check the knowledge base.\n3. NEVER GUESS PROMOTIONS: If a user provides a discount code, you MUST call the `validate_voucher` tool.\n4. ZERO HALLUCINATION: If you call a tool and it returns empty, null, or \"not found\", you MUST explicitly tell the user: \"I don't have that information right now.\" Do not make up a policy or a car.\n\n# The Circuit Breaker (Human Handoff)\nYou have an `escalate_to_human` tool. You MUST trigger this tool instantly, without answering the user's question, if:\n- The user explicitly asks to speak to a human, agent, or manager.\n- The user expresses high frustration, anger, or urgency.\n- The user reports a bug, website crash, or payment failure.\n- The user is involved in a physical emergency or accident (immediately advise them to call 000, then escalate).\nWhen you trigger this tool, reply ONLY with: \"I'm escalating this to our support team right now. A human agent will take over this chat momentarily.\"\n\n# Strict Boundaries (Guardrails)\n- You are a car rental assistant. If the user asks about coding, politics, history, or anything unrelated to Tashus or travel, politely decline to answer and steer the conversation back to car rentals.\n- Never mention or compare Tashus to competitors (e.g., Hertz, Avis, Budget, Uber). If asked, simply highlight Tashus's premium service.\n- Never attempt to process a credit card directly in the chat. Direct users to the official booking link.\n- Do not output markdown tables or complex formatting unless specifically requested; prefer bullet points for readability on mobile devices.",
+      "model": "gpt-4o-mini",
+      "temperature": 0.2,
+      "max_tokens": 512,
+      "enabled_tools": [
+        "search_vehicles",
+        "check_availability",
+        "search_knowledge_base",
+        "validate_voucher",
+        "get_vehicle_details",
+        "get_user_bookings"
+      ],
+      "updated_by": "local-1784009998633-dwfud5",
+      "config_key": "production",
+      "is_active": true
+    }
+  ],
+  "ai_tool_call_logs": []
+}
