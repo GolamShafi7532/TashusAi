@@ -190,7 +190,8 @@ async function* tryGrokStream(
   tools: any[],
   model: string,
   temperature: number,
-  maxTokens: number
+  maxTokens: number,
+  dynamicContext?: string   // v3.1.0: injected as 2nd system message (not cached by Groq)
 ) {
   if (!env.GROK_API_KEYS) return;
 
@@ -210,8 +211,19 @@ async function* tryGrokStream(
     },
   }));
 
+  // v3.1.0 Prefix-cache structure:
+  //   [0] { role: 'system', content: <STATIC base prompt> }   ← Groq caches this (50% discount)
+  //   [1] { role: 'system', content: <DYNAMIC: datetime+RAG+summary> }  ← billed normally
+  //   [2..N] conversation history
+  // Keeping the static prompt byte-for-byte identical across ALL requests is what
+  // activates Groq's automatic prefix cache. Never randomise or timestamp it.
+  const systemMessages: any[] = [{ role: 'system', content: system }];
+  if (dynamicContext && dynamicContext.trim()) {
+    systemMessages.push({ role: 'system', content: dynamicContext.trim() });
+  }
+
   const openAiMessages = [
-    { role: 'system', content: system },
+    ...systemMessages,
     ...convertAnthropicToOpenAi(messages),
   ];
 
@@ -781,9 +793,25 @@ async function* generateToolAwareMock(
  * Unified stream helper for both Grok and Anthropic.
  * Yields either text segments or structured tool calls.
  * Falls back to tool-aware mock if all real providers fail.
+ *
+ * v3.1.0 — Phase B.1.1: Prefix-cache optimisation
+ *  - `system` carries only the STATIC base prompt (byte-identical every request)
+ *  - `dynamicContext` carries datetime + RAG + summary (injected as a second
+ *    system message right before conversation history so it doesn't pollute
+ *    the cached prefix)
+ *  Groq automatically caches the first N tokens of the prompt when they are
+ *  identical across requests, giving a 50% token-cost discount on the static
+ *  portion (~1,450 tokens per turn).
+ *
+ * v3.1.0 — Phase D.2: LLM Fallback Chain
+ *  Groq → OpenRouter → Anthropic, with per-provider circuit breakers.
  */
+import { streamWithFallback } from './llm-providers/fallback-chain';
+import type { LLMCallParams } from './llm-providers/types';
+
 export async function* generateCompletionStream(params: {
   system: string;
+  dynamicContext?: string;   // NEW: datetime block + RAG context + summary
   messages: any[];
   tools: any[];
   model: string;
@@ -794,6 +822,13 @@ export async function* generateCompletionStream(params: {
   const isGrokMock = grokKeys.length === 0 || grokKeys.every(isMockKey);
   const isAnthropicMock = !env.ANTHROPIC_API_KEY || isMockKey(env.ANTHROPIC_API_KEY ?? '');
 
+  // Merge static + dynamic into one system string for providers that don't
+  // distinguish (Anthropic, mock). Groq gets them as two separate messages.
+  const combinedSystem = params.dynamicContext
+    ? `${params.system}\n\n${params.dynamicContext}`
+    : params.system;
+
+  // Mock mode — no real keys configured
   if (isGrokMock && isAnthropicMock) {
     console.log('[LLM] ⚠️  No real LLM keys configured — using tool-aware mock (tools WILL be called)');
     yield* generateToolAwareMock(params.messages, params.tools);
@@ -802,49 +837,35 @@ export async function* generateCompletionStream(params: {
 
   console.log(`[LLM] Using REAL LLM: grokMock=${isGrokMock}, anthropicMock=${isAnthropicMock}`);
 
-  if (env.GROK_API_KEYS && !isGrokMock) {
-    try {
-      console.log('[LLM] → Sending to Grok (real API call)');
-      for await (const chunk of tryGrokStream(
-        params.system,
-        params.messages,
-        params.tools,
-        params.model,
-        params.temperature,
-        params.maxTokens
-      )) {
-        yield chunk;
-      }
-      console.log('[LLM] ← Grok stream complete');
-      return;
-    } catch (e) {
-      console.warn('[LLM] Grok stream failed:', (e as Error).message);
-    }
-  }
+  // Build provider-specific stream functions to pass into the fallback chain
+  const llmParams: LLMCallParams = {
+    system:         params.system,
+    dynamicContext: params.dynamicContext,
+    messages:       params.messages,
+    tools:          params.tools,
+    model:          params.model,
+    temperature:    params.temperature,
+    maxTokens:      params.maxTokens,
+  };
 
-  if (!isAnthropicMock) {
-    try {
-      console.log('[LLM] → Sending to Anthropic (real API call)');
-      for await (const chunk of streamAnthropic(
-        params.system,
-        params.messages,
-        params.tools,
-        params.model,
-        params.temperature,
-        params.maxTokens
-      )) {
-        yield chunk;
-      }
-      console.log('[LLM] ← Anthropic stream complete');
-      return;
-    } catch (e) {
-      console.warn('[LLM] Anthropic stream failed:', (e as Error).message);
-    }
-  }
+  const groqFn = (!isGrokMock && env.GROK_API_KEYS)
+    ? (p: LLMCallParams) => tryGrokStream(p.system, p.messages, p.tools, p.model, p.temperature, p.maxTokens, p.dynamicContext)
+    : null;
 
-  // All real providers failed — fall back to tool-aware mock
-  console.warn('[LLM] ⚠️  All LLM providers failed — falling back to tool-aware mock');
-  yield* generateToolAwareMock(params.messages, params.tools);
+  const anthropicFn = !isAnthropicMock
+    ? (p: LLMCallParams) => streamAnthropic(combinedSystem, p.messages, p.tools, p.model, p.temperature, p.maxTokens)
+    : null;
+
+  try {
+    for await (const chunk of streamWithFallback(llmParams, groqFn, anthropicFn)) {
+      yield chunk;
+    }
+  } catch (err: any) {
+    console.error('[LLM] ⚠️  All real providers exhausted:', err.message);
+    // Last resort: tool-aware mock so the user gets some response
+    console.warn('[LLM] ⚠️  Falling back to tool-aware mock');
+    yield* generateToolAwareMock(params.messages, params.tools);
+  }
 }
 
 export default { generateCompletion, generateCompletionStream };

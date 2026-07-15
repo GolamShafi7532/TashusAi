@@ -12,8 +12,8 @@ import { db } from '@/db/client';
 import { getEmbeddingProvider } from './embedding-provider';
 import { estimateTokens } from './chunker';
 
-const KB_SIMILARITY_THRESHOLD = 0.60;
-const CHUNK_SIMILARITY_THRESHOLD = 0.50; // Filter irrelevant document chunks
+const KB_SIMILARITY_THRESHOLD = 0.75;      // v3.1.0: raised from 0.60 — real embeddings have stronger signal
+const CHUNK_SIMILARITY_THRESHOLD = 0.65;   // v3.1.0: raised from 0.50 — avoids injecting loosely related PDF sections
 const KB_LIMIT = 4;
 const CHUNK_LIMIT = 4; // Reduced from 8 → saves ~2,000 tokens per turn
 const MAX_CONTEXT_TOKENS = 2000; // Tighter cap to stay well within Groq TPD limits

@@ -7,6 +7,19 @@ const BACKEND_URL =
     : 'http://localhost:3001';
 
 /**
+ * Detect the user's IANA timezone and current local time.
+ * Used to give the LLM accurate "today / tomorrow / this weekend" context.
+ */
+function buildUserContext() {
+  const now = new Date();
+  return {
+    timezone: Intl.DateTimeFormat().resolvedOptions().timeZone,  // e.g. "Australia/Sydney"
+    localTime: now.toISOString(),                                // UTC ISO string
+    timezoneOffset: now.getTimezoneOffset(),                     // e.g. -600 for AEST (UTC+10)
+  };
+}
+
+/**
  * Low-level SSE client that wraps @microsoft/fetch-event-source.
  * Uses POST (not GET) because we send a body with each message.
  */
@@ -23,7 +36,7 @@ export function openSSEStream(
   fetchEventSource(`${BACKEND_URL}/api/ai/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify({ sessionId, message }),
+    body: JSON.stringify({ sessionId, message, userContext: buildUserContext() }),
     signal: abortController.signal,
     credentials: 'include',
     openWhenHidden: true, // keep alive when tab is backgrounded

@@ -4,9 +4,17 @@ import { processMessageStream } from '@/agent/orchestrator';
 import { getRedisSubscriber, buildSessionControlChannel, redis } from '@/lib/redis';
 import { isRateLimited } from '@/lib/rate-limiter';
 
+export interface UserContext {
+  timezone: string;       // IANA tz name, e.g. "Australia/Sydney"
+  localTime: string;      // ISO UTC string of the user's current moment
+  timezoneOffset: number; // getTimezoneOffset() value, e.g. -600 for UTC+10
+}
+
 type StreamBody = {
   sessionId: string;
   text: string;
+  message?: string;       // widget sends "message", not "text"
+  userContext?: UserContext;
 };
 
 function sseHeaders() {
@@ -24,7 +32,9 @@ function encodeEvent(event: string, data: any) {
 export async function POST(req: Request) {
   const body = await req.json().catch(() => ({})) as Partial<StreamBody>;
   const sessionId = body.sessionId;
-  const text = body.text;
+  // Widget sends "message" field; non-streaming route uses "text" — accept both
+  const text = body.message ?? body.text;
+  const userContext = body.userContext;
 
   if (!sessionId) {
     return NextResponse.json({ error: 'sessionId required' }, { status: 400 });
@@ -141,7 +151,7 @@ export async function POST(req: Request) {
           return;
         }
 
-        const orchestratorStream = processMessageStream(sessionId, text);
+        const orchestratorStream = processMessageStream(sessionId, text, userContext);
         for await (const event of orchestratorStream) {
           if (isPaused || isClosed) {
             break;

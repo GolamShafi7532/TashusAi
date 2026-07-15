@@ -1,6 +1,6 @@
 # Tashus AI Chatbot Ecosystem — Implementation Tracker
 
-> **Project:** Isolated AI-powered customer support system for Tashus
+> **Project:** Isolated AI-powered customer support system for Tashus.
 > **Source of Truth:** `ai_ecosystem_plan_New.md`
 > **Status Legend:** 🔴 Not Started | 🟡 In Progress | 🟢 Complete | ⚠️ Blocked
 

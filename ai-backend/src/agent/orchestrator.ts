@@ -4,15 +4,87 @@
  * enqueues background summarization when the conversation grows.
  *
  * Source of truth: AI Chatbot blueprint.md §3.4
+ *
+ * v3.1.0 Changes:
+ *  - Accepts optional UserContext (timezone, localTime) from the frontend
+ *  - Injects localised date/time block at top of system prompt so the LLM
+ *    can accurately resolve relative dates like "tomorrow" or "this weekend"
  */
 import { db, AiAgentConfig } from '@/db/client';
 import { retrieve, searchKnowledgeBaseTool } from '@/rag/retriever';
+import { ragDedupCache } from '@/rag/dedup-cache';
 import { generateCompletionStream } from '@/agent/llm';
 import { executeTool, AGENT_TOOLS } from '@/agent/tools';
+import { validateToolCall } from '@/agent/tool-executor';
+import { detectHallucinations } from '@/agent/fact-checker';
 import { loadActiveAgentConfig } from '@/agent/config';
 import { enqueueSummarizeSession } from '@/lib/queue';
+import { metrics } from '@/lib/metrics';
+import { logger } from '@/lib/logger';
+import { env } from '@/lib/env';
+import type { UserContext } from '@/app/api/ai/chat/stream/route';
 
 type ConversationMessage = { role: string; content: string };
+
+// ── Timezone abbreviation map ─────────────────────────────────────────────────
+const TZ_ABBR: Record<string, string> = {
+  'Australia/Sydney':    'AEST/AEDT',
+  'Australia/Melbourne': 'AEST/AEDT',
+  'Australia/Brisbane':  'AEST',
+  'Australia/Perth':     'AWST',
+  'Australia/Adelaide':  'ACST/ACDT',
+  'Australia/Darwin':    'ACST',
+  'Australia/Hobart':    'AEST/AEDT',
+  'Pacific/Auckland':    'NZST/NZDT',
+  'Asia/Singapore':      'SGT',
+  'America/New_York':    'EST/EDT',
+  'America/Los_Angeles': 'PST/PDT',
+  'Europe/London':       'GMT/BST',
+};
+
+/**
+ * Build the date/time context block injected into the system prompt.
+ * This lets the LLM resolve "tomorrow", "next weekend", etc. correctly.
+ */
+function buildDateTimeContext(userContext: UserContext): string {
+  const localDate = new Date(userContext.localTime);
+  const tzAbbr = TZ_ABBR[userContext.timezone] ?? 'Local Time';
+
+  // Format as: "Wednesday, 16 July 2026 at 2:30 pm AEST"
+  const formattedLocal = localDate.toLocaleString('en-AU', {
+    timeZone: userContext.timezone,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+    hour: 'numeric',
+    minute: '2-digit',
+    hour12: true,
+  });
+
+  // Tomorrow's date in the user's timezone
+  const tomorrow = new Date(localDate);
+  tomorrow.setDate(tomorrow.getDate() + 1);
+  const tomorrowStr = tomorrow.toLocaleDateString('en-AU', {
+    timeZone: userContext.timezone,
+    weekday: 'long',
+    year: 'numeric',
+    month: 'long',
+    day: 'numeric',
+  });
+
+  return `---
+CURRENT USER DATE & TIME:
+${formattedLocal} (${tzAbbr})
+Timezone: ${userContext.timezone}
+ISO Timestamp (UTC): ${userContext.localTime}
+
+When user says "tomorrow" → ${tomorrowStr}
+When user says "tonight" → same date above, evening hours
+When user says "this weekend" → upcoming Saturday/Sunday from the date above
+All pickup/return dates you generate MUST be in ISO 8601 UTC format.
+---`;
+}
 
 /**
  * Lightweight intent classifier — avoids running the expensive semantic
@@ -80,7 +152,7 @@ async function maybeEnqueueSummarization(sessionId: string) {
 /**
  * Generator function that streams events from the agent chat loop.
  */
-export async function* processMessageStream(sessionId: string, userText: string) {
+export async function* processMessageStream(sessionId: string, userText: string, userContext?: UserContext) {
   const turnStart = Date.now();
   let totalInputTokens = 0;
   let totalOutputTokens = 0;
@@ -89,6 +161,8 @@ export async function* processMessageStream(sessionId: string, userText: string)
   console.log(`[Orchestrator] ► New message | session=${sessionId}`);
   console.log(`[Orchestrator] User: "${userText.slice(0, 120)}"`);
   console.log(`${'='.repeat(60)}`);
+
+  metrics.increment('requests-started');
 
   // 1. Insert user message
   await db.from('ai_chat_messages').insert({
@@ -126,16 +200,28 @@ export async function* processMessageStream(sessionId: string, userText: string)
   console.log(`[Orchestrator] RAG retrieval: ${ragNeeded ? retrieval.sources.length + ' sources found' : 'skipped (transactional/greeting intent)'}`);
   if (ragNeeded && retrieval.sources.length > 0) {
     retrieval.sources.forEach((s, i) => console.log(`[Orchestrator]   source[${i}]: ${s.label.slice(0, 80)}`));
+
+    // v3.1.0 Phase B.1.2: Cache retrieval result for dedup — prevents the
+    // search_knowledge_base tool from fetching the same content again this turn
+    await ragDedupCache.store(sessionId, userText, retrieval.context);
   } else if (ragNeeded) {
     console.log(`[Orchestrator]   No matching knowledge base entries (mock embeddings may be active)`);
   }
 
-  // Prepare system prompt: merge system_prompt, summary, retrieval context
-  const systemPrompt = [
-    config.system_prompt.trim(),
+  // Prepare system prompt split for Groq prefix caching (Phase B.1.1):
+  //   - staticSystem: byte-identical on every request → Groq caches at 50% cost
+  //   - dynamicContext: datetime + RAG + summary → billed normally, but smaller
+  const staticSystem = config.system_prompt.trim();
+
+  const dynamicContextParts = [
+    userContext ? buildDateTimeContext(userContext) : '',
     conversation.summary ? `Conversation summary so far:\n${conversation.summary}` : '',
     retrieval.context ? `Retrieved knowledge base content:\n${retrieval.context}` : '',
-  ].filter(Boolean).join('\n\n');
+  ].filter(Boolean);
+  const dynamicContext = dynamicContextParts.join('\n\n');
+
+  // Keep the combined systemPrompt for any path that still needs it (non-Grok)
+  const systemPrompt = dynamicContext ? `${staticSystem}\n\n${dynamicContext}` : staticSystem;
 
   // loopMessages contains the conversation history up to the current turn (inclusive)
   const loopMessages: any[] = [...conversation.recentMessages];
@@ -161,7 +247,8 @@ export async function* processMessageStream(sessionId: string, userText: string)
 
     // Call the streaming completion helper
     const stream = generateCompletionStream({
-      system: systemPrompt,
+      system: staticSystem,          // static only → Groq prefix cache
+      dynamicContext: dynamicContext || undefined,
       messages: loopMessages,
       tools: toolsToUse as any,
       model: config.model,
@@ -200,13 +287,67 @@ export async function* processMessageStream(sessionId: string, userText: string)
         break;
       }
 
+      // ── v3.1.0 Phase A.1.3: Validate tool args before dispatch ─────────────
+      const validation = validateToolCall(toolName, toolArgs);
+      if (!validation.valid) {
+        console.warn(`[Orchestrator] ⚠️  Tool validation failed (${toolName}): ${validation.error}`);
+
+        // Feed the error back as a tool_result so the LLM can self-correct
+        loopMessages.push({
+          role: 'assistant',
+          content: [
+            { type: 'text', text: assistantTextThisRound },
+            { type: 'tool_use', id: toolId, name: toolName, input: toolArgs },
+          ],
+        });
+        loopMessages.push({
+          role: 'user',
+          content: [
+            {
+              type: 'tool_result',
+              tool_use_id: toolId,
+              content: `[VALIDATION ERROR] ${validation.error}`,
+              is_error: true,
+            },
+          ],
+        });
+
+        yield { type: 'tool_result' as const, tool: toolName, result: { error: validation.error } };
+
+        // Log the validation failure
+        try {
+          await db.from('ai_tool_call_logs').insert({
+            session_id: sessionId,
+            tool_name: toolName,
+            http_method: 'GET',
+            endpoint: toolName,
+            request_params: toolArgs,
+            response_status: 422,
+            response_summary: { validation_error: validation.error },
+            cache_hit: false,
+            duration_ms: 0,
+          } as any);
+        } catch { /* non-critical */ }
+
+        // Do NOT break — continue the loop so the LLM gets a chance to retry
+        continue;
+      }
+
       const start = Date.now();
       let result: any = null;
       let status = 200;
 
       try {
         if (toolName === 'search_knowledge_base') {
-          result = await searchKnowledgeBaseTool(String(toolArgs?.query ?? ''));
+          // v3.1.0 Phase B.1.2: Check dedup cache before running retrieval
+          const dedupHit = await ragDedupCache.checkDuplicate(sessionId, String(toolArgs?.query ?? ''));
+          if (dedupHit) {
+            // Return cached result — no embedding call, no DB query, ~2,000 tokens saved
+            result = dedupHit;
+            console.log(`[Orchestrator] ✅ RAG dedup cache hit for search_knowledge_base — skipped live retrieval`);
+          } else {
+            result = await searchKnowledgeBaseTool(String(toolArgs?.query ?? ''));
+          }
         } else {
           result = await executeTool(toolName, toolArgs, { sessionId });
         }
@@ -218,6 +359,8 @@ export async function* processMessageStream(sessionId: string, userText: string)
         result = { error: String(err?.message ?? err) };
         status = 500;
         console.error(`[Orchestrator] ❌ Tool error (${toolName}):`, err?.message ?? err);
+        metrics.increment('tool-errors');
+        metrics.logEvent('error', 'tool-execution-failed', { sessionId, toolName, error: String(err?.message ?? err) });
       }
 
       const duration = Date.now() - start;
@@ -283,10 +426,46 @@ export async function* processMessageStream(sessionId: string, userText: string)
       : "I don't have that information in our knowledge base. I can check live availability or look up vouchers if you'd like."
   );
 
+  // v3.1.0 Phase C.4: Hallucination check on the final assembled response
+  const hallucinationCheck = detectHallucinations(
+    finalMessage,
+    toolCalls.map((t) => ({ tool: t.name, data: t.result })),
+    retrieval.context
+  );
+  if (!hallucinationCheck.safe) {
+    console.warn('[Orchestrator] ⚠️  Hallucination warnings detected:');
+    hallucinationCheck.warnings.forEach((w) => console.warn(`  • ${w}`));
+  }
+
   const turnLatency = Date.now() - turnStart;
 
-  console.log(`[Orchestrator] ✓ Done | latency=${turnLatency}ms, in=${totalInputTokens}tok, out=${totalOutputTokens}tok`);
-  console.log(`[Orchestrator] Final message (${finalMessage.length} chars): "${finalMessage.slice(0, 150)}..."`);
+  logger.info('Orchestrator turn complete', {
+    sessionId,
+    latencyMs:   turnLatency,
+    tokensIn:    totalInputTokens,
+    tokensOut:   totalOutputTokens,
+    toolsCalled: toolCalls.map((t) => t.name),
+    ragSources:  retrieval.sources.length,
+    hallucinationSafe: hallucinationCheck.safe,
+  });
+
+  // v3.1.0 Phase E.1: record metrics
+  metrics.increment('requests-success');
+  metrics.recordLatency('orchestrate-stream', turnLatency);
+  if (totalInputTokens || totalOutputTokens) {
+    // Determine which provider was used (Groq unless fallback triggered)
+    const firstGroqKey = (env.GROK_API_KEYS ?? '').split(',')[0]?.trim() ?? '';
+    const groqIsReal = firstGroqKey.length > 0 && !/dummy|placeholder|example|test/i.test(firstGroqKey) && !firstGroqKey.startsWith('sk-ant-dummy-');
+    const provider = groqIsReal ? 'groq' : 'anthropic';
+    metrics.recordTokenUsage(provider, totalInputTokens, totalOutputTokens);
+  }
+  if (!hallucinationCheck.safe) {
+    metrics.increment('hallucination-events');
+    metrics.logEvent('hallucination', 'detected', {
+      sessionId,
+      warnings: hallucinationCheck.warnings,
+    });
+  }
 
   await db.from('ai_chat_messages').insert({
     session_id: sessionId,
@@ -310,11 +489,11 @@ export async function* processMessageStream(sessionId: string, userText: string)
 /**
  * Standard processMessage helper for non-streaming clients.
  */
-export async function processMessage(sessionId: string, userText: string) {
+export async function processMessage(sessionId: string, userText: string, userContext?: UserContext) {
   let finalMessage = '';
   let sources: any[] = [];
   
-  const stream = processMessageStream(sessionId, userText);
+  const stream = processMessageStream(sessionId, userText, userContext);
   for await (const event of stream) {
     if (event.type === 'done') {
       finalMessage = event.message;
