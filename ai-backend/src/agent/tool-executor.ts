@@ -138,14 +138,19 @@ function validateSearchVehicles(args: Record<string, unknown>): ValidationResult
     };
   }
 
-  // Allow a 1-minute buffer for race conditions between frontend detection and backend processing
-  const oneMinuteAgo = new Date(now.getTime() - 60_000);
-  if (fromDate < oneMinuteAgo) {
+  // Allow up to 24 hours in the past to cover:
+  //  - Timezone differences (user in UTC+10 gives date that appears past in UTC)
+  //  - Race conditions between the user typing and the request arriving
+  //  - Groq using a slightly outdated "current date" from its training
+  const twentyFourHoursAgo = new Date(now.getTime() - 24 * 60 * 60 * 1000);
+  if (fromDate < twentyFourHoursAgo) {
+    const todayISO = now.toISOString().slice(0, 10);
     return {
       valid: false,
       error:
-        `Pickup date "${from}" appears to be in the past. ` +
-        `Today's date context is injected at the top of your system prompt — use it to calculate future dates.`,
+        `Pickup date "${from}" is too far in the past. ` +
+        `Today's actual server date is ${todayISO} (UTC). ` +
+        `Please recalculate using this date. For "this weekend", use the upcoming Saturday from ${todayISO}.`,
     };
   }
 

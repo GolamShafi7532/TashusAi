@@ -1,8 +1,27 @@
 import { NextResponse } from 'next/server';
-import { db } from '@/lib/supabase';
+import { db, isLocalDevMode } from '@/lib/supabase';
 import { verifyJwt } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
+
+// Token cost per input token by provider (USD)
+const TOKEN_COST: Record<string, { prompt: number; completion: number }> = {
+  groq:       { prompt: 0.59  / 1_000_000, completion: 0.79  / 1_000_000 },
+  openrouter: { prompt: 0.88  / 1_000_000, completion: 0.88  / 1_000_000 },
+  anthropic:  { prompt: 3.00  / 1_000_000, completion: 15.00 / 1_000_000 },
+};
+
+/** Resolve admin — bypass auth in local dev mode */
+async function resolveAdmin(req: Request) {
+  if (isLocalDevMode()) {
+    return { userId: 'local-dev-admin', email: 'dev@local', role: 'super_admin' };
+  }
+  const token = req.headers.get('cookie')
+    ?.split(';')
+    .find((c) => c.trim().startsWith('admin_access_token='))
+    ?.split('=')[1];
+  return token ? await verifyJwt(token) : null;
+}
 
 /**
  * GET /api/admin/analytics/overview
@@ -10,13 +29,7 @@ export const dynamic = 'force-dynamic';
  */
 export async function GET(req: Request) {
   try {
-    // Authenticate
-    const token = req.headers.get('cookie')
-      ?.split(';')
-      .find((c) => c.trim().startsWith('admin_access_token='))
-      ?.split('=')[1];
-
-    const admin = token ? await verifyJwt(token) : null;
+    const admin = await resolveAdmin(req);
     if (!admin) {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
@@ -48,19 +61,37 @@ export async function GET(req: Request) {
 
     const handoffRate = totalSessions > 0 ? (handoffCount / totalSessions) * 100 : 0;
 
-    // 2. Fetch tool calls counts
+    // 2. Fetch tool call logs with token data
     const { data: toolLogs } = await db
       .from('ai_tool_call_logs')
-      .select('tool_name,duration_ms') as any;
+      .select('tool_name,duration_ms,tokens_in,tokens_out,token_cost_usd,provider') as any;
 
     const totalToolCalls = toolLogs?.length || 0;
     let totalLatency = 0;
+    let totalTokensIn = 0;
+    let totalTokensOut = 0;
+    let totalCostUsd = 0;
     const toolCallDistribution: Record<string, number> = {};
 
     if (toolLogs) {
       for (const log of toolLogs) {
-        totalLatency += log.duration_ms || 0;
-        toolCallDistribution[log.tool_name] = (toolCallDistribution[log.tool_name] || 0) + 1;
+        totalLatency   += log.duration_ms   || 0;
+        totalTokensIn  += log.tokens_in     || 0;
+        totalTokensOut += log.tokens_out    || 0;
+
+        // Use stored cost if available, otherwise estimate from tokens
+        if (log.token_cost_usd != null) {
+          totalCostUsd += log.token_cost_usd;
+        } else if (log.tokens_in || log.tokens_out) {
+          const provider = log.provider || 'groq';
+          const costs = TOKEN_COST[provider] ?? TOKEN_COST.groq;
+          totalCostUsd += (log.tokens_in || 0) * costs.prompt + (log.tokens_out || 0) * costs.completion;
+        }
+
+        // v3.1.0: Exclude __turn_summary__ from tool distribution (it's metadata, not a real tool call)
+        if (log.tool_name !== '__turn_summary__') {
+          toolCallDistribution[log.tool_name] = (toolCallDistribution[log.tool_name] || 0) + 1;
+        }
       }
     }
 
@@ -69,16 +100,19 @@ export async function GET(req: Request) {
     return NextResponse.json({
       metrics: {
         totalSessions,
-        activeSessions: activeCount,
+        activeSessions:    activeCount,
         handedOffSessions: handoffCount,
-        closedSessions: closedCount,
-        handoffRate: parseFloat(handoffRate.toFixed(1)),
+        closedSessions:    closedCount,
+        handoffRate:       parseFloat(handoffRate.toFixed(1)),
         totalToolCalls,
-        avgToolLatencyMs: Math.round(avgToolCallDuration),
+        avgToolLatencyMs:  Math.round(avgToolCallDuration),
+        totalTokensIn,
+        totalTokensOut,
+        totalCostUsd:      parseFloat(totalCostUsd.toFixed(4)),
       },
       distribution: {
         channels: channelDistribution,
-        tools: toolCallDistribution,
+        tools:    toolCallDistribution,
       },
     });
   } catch (err: any) {

@@ -63,6 +63,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
 
         if (cancelled) return;
         setSessionId(sid);
+        console.log('[AI Widget] 🔑 Session initialized:', sid);
 
         // Handle Tashus JWT passthrough
         if (jwtCookieName) {
@@ -80,6 +81,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
         // Load message history
         const history = await fetchHistory(sid);
         if (cancelled) return;
+        console.log('[AI Widget] 📜 Loaded message history count:', history.length);
 
         const historicMessages: ChatMessage[] = history
           .filter((m) => m.role !== 'tool' && m.role !== 'system')
@@ -92,6 +94,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
 
         setMessages(historicMessages);
       } catch (err) {
+        console.error('[AI Widget] ❌ Failed to initialize session/history:', err);
         if (!cancelled) {
           setError('Could not connect to Tashus AI. Please try again.');
         }
@@ -107,7 +110,12 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
   // ── Stream handler ───────────────────────────────────────────────────────────
   const send = useCallback(
     (text: string) => {
-      if (!sessionId || streaming || !text.trim()) return;
+      if (!sessionId || streaming || !text.trim()) {
+        console.warn('[AI Widget] ⚠️ Cannot send:', { sessionId, streaming, text });
+        return;
+      }
+
+      console.log('[AI Widget] 🚀 Sending message:', text.trim(), 'Session ID:', sessionId);
 
       // Cancel any in-flight request
       abortRef.current?.abort();
@@ -142,7 +150,8 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
         onEvent(event: StreamEvent) {
           switch (event.type) {
             case 'token':
-              accumulatedText += event.text;
+              const tokenText = (event as any).text || (event as any).token || (event as any).delta || '';
+              accumulatedText += tokenText;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
@@ -212,10 +221,11 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
               break;
 
             case 'done':
+              const doneText = (event as any).message || (event as any).text || accumulatedText;
               setMessages((prev) =>
                 prev.map((m) =>
                   m.id === assistantId
-                    ? { ...m, content: event.message, streaming: false }
+                    ? { ...m, content: doneText, streaming: false }
                     : m
                 )
               );
@@ -223,7 +233,9 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
               break;
 
             case 'error':
-              setError(event.message || 'An error occurred.');
+              const errText = (event as any).message || (event as any).error || 'An error occurred.';
+              console.error('[AI Widget] ❌ SSE event error:', errText);
+              setError(errText);
               setStreaming(false);
               setMessages((prev) =>
                 prev.map((m) =>
@@ -236,7 +248,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
 
         onError(err) {
           if (controller.signal.aborted) return;
-          console.error('[Widget SSE] Error:', err);
+          console.error('[AI Widget] ❌ SSE Connection Error:', err);
           setError('Connection lost. Please try again.');
           setStreaming(false);
           setMessages((prev) =>
@@ -247,6 +259,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
         },
 
         onClose() {
+          console.log('[AI Widget] 🔚 SSE Stream Connection Closed');
           setStreaming(false);
           // Finalize message in case done event was missed
           setMessages((prev) =>

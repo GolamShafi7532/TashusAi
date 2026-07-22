@@ -1,10 +1,16 @@
 import { fetchEventSource } from '@microsoft/fetch-event-source';
 import type { StreamEvent } from './types';
 
-const BACKEND_URL =
-  typeof __AI_BACKEND_URL__ !== 'undefined'
+function getBackendUrl(): string {
+  if (typeof window !== 'undefined' && (window as any).tashusAiConfig?.backendUrl) {
+    return (window as any).tashusAiConfig.backendUrl;
+  }
+  return typeof __AI_BACKEND_URL__ !== 'undefined'
     ? __AI_BACKEND_URL__
     : 'http://localhost:3001';
+}
+
+const BACKEND_URL = getBackendUrl();
 
 /**
  * Detect the user's IANA timezone and current local time.
@@ -33,7 +39,8 @@ export function openSSEStream(
     onClose: () => void;
   }
 ): void {
-  fetchEventSource(`${BACKEND_URL}/api/ai/chat/stream`, {
+  const backendUrl = getBackendUrl();
+  fetchEventSource(`${backendUrl}/api/ai/chat/stream`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify({ sessionId, message, userContext: buildUserContext() }),
@@ -44,7 +51,9 @@ export function openSSEStream(
     onmessage(ev) {
       if (!ev.data) return;
       try {
-        const parsed: StreamEvent = JSON.parse(ev.data);
+        const rawObj = JSON.parse(ev.data);
+        const eventType = rawObj.type || ev.event || 'token';
+        const parsed: StreamEvent = { type: eventType, ...rawObj };
         handlers.onEvent(parsed);
       } catch {
         // Ignore malformed events
@@ -66,7 +75,8 @@ export function openSSEStream(
  * Fetch session ID from the backend (creates or retrieves).
  */
 export async function fetchOrCreateSession(visitorId: string): Promise<string> {
-  const res = await fetch(`${BACKEND_URL}/api/ai/session`, {
+  const backendUrl = getBackendUrl();
+  const res = await fetch(`${backendUrl}/api/ai/session`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     credentials: 'include',
@@ -86,7 +96,8 @@ export async function fetchHistory(sessionId: string): Promise<Array<{
   content: string;
   created_at: string;
 }>> {
-  const res = await fetch(`${BACKEND_URL}/api/ai/chat/${sessionId}/history`, {
+  const backendUrl = getBackendUrl();
+  const res = await fetch(`${backendUrl}/api/ai/chat/${sessionId}/history`, {
     credentials: 'include',
   });
   if (!res.ok) return [];
@@ -102,7 +113,8 @@ export async function verifyTashusToken(
   token: string
 ): Promise<void> {
   try {
-    await fetch(`${BACKEND_URL}/api/ai/verify-tashus-token`, {
+    const backendUrl = getBackendUrl();
+    await fetch(`${backendUrl}/api/ai/verify-tashus-token`, {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       credentials: 'include',

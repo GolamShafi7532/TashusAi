@@ -122,6 +122,11 @@ export interface AiToolCallLog {
   response_summary: Record<string, any> | null;
   cache_hit: boolean;
   duration_ms: number | null;
+  // v3.1.0: token tracking columns
+  tokens_in: number | null;
+  tokens_out: number | null;
+  token_cost_usd: number | null;
+  provider: string | null;   // e.g. 'groq', 'openrouter', 'anthropic'
   created_at: string;
 }
 

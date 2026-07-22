@@ -149,6 +149,27 @@ async function maybeEnqueueSummarization(sessionId: string) {
   }
 }
 
+async function attachTokenMetricsToToolLogs(
+  toolCalls: Array<{ name: string; params: any; result?: any; logId?: string }>,
+  payload: { tokensIn: number; tokensOut: number; tokenCostUsd: number; provider: string | null }
+) {
+  const logIds = toolCalls.map((entry) => entry.logId).filter(Boolean) as string[];
+  if (logIds.length === 0) return;
+
+  await Promise.all(logIds.map(async (logId) => {
+    try {
+      await ((db.from('ai_tool_call_logs') as any).update({
+        tokens_in: payload.tokensIn > 0 ? payload.tokensIn : null,
+        tokens_out: payload.tokensOut > 0 ? payload.tokensOut : null,
+        token_cost_usd: payload.tokenCostUsd > 0 ? parseFloat(payload.tokenCostUsd.toFixed(8)) : null,
+        provider: payload.tokensIn > 0 || payload.tokensOut > 0 ? payload.provider : null,
+      } as any).eq('id', logId));
+    } catch {
+      // Non-critical — a failed metadata update should not break the turn.
+    }
+  }));
+}
+
 /**
  * Generator function that streams events from the agent chat loop.
  */
@@ -164,9 +185,14 @@ export async function* processMessageStream(sessionId: string, userText: string,
 
   metrics.increment('requests-started');
 
+  // Sanitise session_id — Supabase requires a valid UUID.
+  // Test sessions use string IDs like "test:..." which fail FK checks silently.
+  const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+  const dbSessionId: string | null = UUID_RE.test(sessionId) ? sessionId : null;
+
   // 1. Insert user message
   await db.from('ai_chat_messages').insert({
-    session_id: sessionId,
+    session_id: dbSessionId,
     role: 'user',
     content: userText,
   } as any);
@@ -183,7 +209,7 @@ export async function* processMessageStream(sessionId: string, userText: string,
   if (!config || config.is_active === false) {
     const offlineMessage = "Tashus AI Support is currently offline. A human representative will get back to you shortly.";
     await db.from('ai_chat_messages').insert({
-      session_id: sessionId,
+      session_id: dbSessionId,
       role: 'assistant',
       content: offlineMessage,
     } as any);
@@ -317,7 +343,7 @@ export async function* processMessageStream(sessionId: string, userText: string,
         // Log the validation failure
         try {
           await db.from('ai_tool_call_logs').insert({
-            session_id: sessionId,
+            session_id: dbSessionId,
             tool_name: toolName,
             http_method: 'GET',
             endpoint: toolName,
@@ -369,7 +395,7 @@ export async function* processMessageStream(sessionId: string, userText: string,
       let logId: string | undefined;
       try {
         const { data: log } = await db.from('ai_tool_call_logs').insert({
-          session_id: sessionId,
+          session_id: dbSessionId,
           tool_name: toolName,
           http_method: 'GET',
           endpoint: toolName,
@@ -452,13 +478,52 @@ export async function* processMessageStream(sessionId: string, userText: string,
   // v3.1.0 Phase E.1: record metrics
   metrics.increment('requests-success');
   metrics.recordLatency('orchestrate-stream', turnLatency);
+
+  // Determine provider used (for cost calculation and logging)
+  const firstGroqKey = (env.GROK_API_KEYS ?? '').split(',')[0]?.trim() ?? '';
+  const groqIsReal = firstGroqKey.length > 0 && !/dummy|placeholder|example|test/i.test(firstGroqKey) && !firstGroqKey.startsWith('sk-ant-dummy-');
+  const usedProvider = groqIsReal ? 'groq' : 'anthropic';
+
   if (totalInputTokens || totalOutputTokens) {
-    // Determine which provider was used (Groq unless fallback triggered)
-    const firstGroqKey = (env.GROK_API_KEYS ?? '').split(',')[0]?.trim() ?? '';
-    const groqIsReal = firstGroqKey.length > 0 && !/dummy|placeholder|example|test/i.test(firstGroqKey) && !firstGroqKey.startsWith('sk-ant-dummy-');
-    const provider = groqIsReal ? 'groq' : 'anthropic';
-    metrics.recordTokenUsage(provider, totalInputTokens, totalOutputTokens);
+    metrics.recordTokenUsage(usedProvider, totalInputTokens, totalOutputTokens);
   }
+
+  // Always write a turn summary row so analytics has a record of every turn.
+  const COST: Record<string, { prompt: number; completion: number }> = {
+    groq:       { prompt: 0.59  / 1_000_000, completion: 0.79  / 1_000_000 },
+    openrouter: { prompt: 0.88  / 1_000_000, completion: 0.88  / 1_000_000 },
+    anthropic:  { prompt: 3.00  / 1_000_000, completion: 15.00 / 1_000_000 },
+  };
+  const costs = COST[usedProvider] ?? COST.groq;
+  const tokenCostUsd = totalInputTokens * costs.prompt + totalOutputTokens * costs.completion;
+
+  await attachTokenMetricsToToolLogs(toolCalls, {
+    tokensIn: totalInputTokens,
+    tokensOut: totalOutputTokens,
+    tokenCostUsd,
+    provider: totalInputTokens > 0 || totalOutputTokens > 0 ? usedProvider : null,
+  });
+
+  try {
+    await db.from('ai_tool_call_logs').insert({
+      session_id:       dbSessionId,    // null for test sessions — avoids UUID FK rejection
+      tool_name:        '__turn_summary__',
+      http_method:      'GET',
+      endpoint:         '__turn_summary__',
+      request_params:   null,
+      response_status:  200,
+      response_summary: { tools_called: toolCalls.map((t) => t.name), test_session: !dbSessionId },
+      cache_hit:        false,
+      duration_ms:      turnLatency,
+      tokens_in:        totalInputTokens || null,
+      tokens_out:       totalOutputTokens || null,
+      token_cost_usd:   tokenCostUsd > 0 ? parseFloat(tokenCostUsd.toFixed(8)) : null,
+      provider:         totalInputTokens > 0 ? usedProvider : null,
+    } as any);
+  } catch (e: any) {
+    console.warn('[Orchestrator] Failed to write turn summary:', e?.message ?? e);
+  }
+
   if (!hallucinationCheck.safe) {
     metrics.increment('hallucination-events');
     metrics.logEvent('hallucination', 'detected', {
@@ -468,7 +533,7 @@ export async function* processMessageStream(sessionId: string, userText: string,
   }
 
   await db.from('ai_chat_messages').insert({
-    session_id: sessionId,
+    session_id: dbSessionId,
     role: 'assistant',
     content: finalMessage,
     tool_calls: toolCalls.map((t) => ({ name: t.name, logId: t.logId })),

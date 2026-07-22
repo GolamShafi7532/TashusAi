@@ -1,5 +1,6 @@
 import { env } from '@/lib/env';
 import { callAnthropicCompletion, streamAnthropicMessages } from './anthropic';
+import { getNextAvailableKey, markKeyCooldown, markKeySuccess, getAllKeys } from './token-bucket';
 
 /**
  * LLM helper: prefer GROK (user-provided keys) with failover between keys,
@@ -27,11 +28,25 @@ function shouldUseMockGrokKey(key: string) {
   return isMockKey(key);
 }
 
+let grokRotationCursor = 0;
+
+function getRotatedGrokKeys(keys: string[]): string[] {
+  if (keys.length === 0) return [];
+  if (keys.length === 1) return keys;
+
+  const nextIndex = grokRotationCursor % keys.length;
+  grokRotationCursor = (grokRotationCursor + 1) % keys.length;
+
+  return [...keys.slice(nextIndex), ...keys.slice(0, nextIndex)];
+}
+
 async function tryGrok(prompt: string): Promise<string | null> {
   if (!env.GROK_API_KEYS) return null;
 
   const keys = env.GROK_API_KEYS.split(',').map((k) => k.trim()).filter(Boolean);
   if (keys.length === 0) return null;
+
+  const orderedKeys = getRotatedGrokKeys(keys);
 
   // Development: only use mock responses for placeholder/dummy keys.
   if (env.NODE_ENV !== 'production' && shouldUseMockGrokKey(keys[0])) {
@@ -42,7 +57,7 @@ async function tryGrok(prompt: string): Promise<string | null> {
   const base = env.GROK_API_BASE_URL ?? 'https://api.groq.com/openai';
   const url = `${base.replace(/\/$/, '')}/v1/chat/completions`;
 
-  for (const key of keys) {
+  for (const key of orderedKeys) {
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -191,49 +206,41 @@ async function* tryGrokStream(
   model: string,
   temperature: number,
   maxTokens: number,
-  dynamicContext?: string   // v3.1.0: injected as 2nd system message (not cached by Groq)
+  dynamicContext?: string
 ) {
-  if (!env.GROK_API_KEYS) return;
-
-  const keys = env.GROK_API_KEYS.split(',').map((k) => k.trim()).filter(Boolean);
-  if (keys.length === 0) return;
+  const allKeys = getAllKeys();
+  if (allKeys.length === 0) return;
 
   const base = env.GROK_API_BASE_URL ?? 'https://api.groq.com/openai';
   const url = `${base.replace(/\/$/, '')}/v1/chat/completions`;
 
-  // Map Anthropic tools to OpenAI format for Grok
   const openAiTools = tools.map((t) => ({
     type: 'function',
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.input_schema,
-    },
+    function: { name: t.name, description: t.description, parameters: t.input_schema },
   }));
 
-  // v3.1.0 Prefix-cache structure:
-  //   [0] { role: 'system', content: <STATIC base prompt> }   ← Groq caches this (50% discount)
-  //   [1] { role: 'system', content: <DYNAMIC: datetime+RAG+summary> }  ← billed normally
-  //   [2..N] conversation history
-  // Keeping the static prompt byte-for-byte identical across ALL requests is what
-  // activates Groq's automatic prefix cache. Never randomise or timestamp it.
   const systemMessages: any[] = [{ role: 'system', content: system }];
-  if (dynamicContext && dynamicContext.trim()) {
-    systemMessages.push({ role: 'system', content: dynamicContext.trim() });
-  }
+  if (dynamicContext?.trim()) systemMessages.push({ role: 'system', content: dynamicContext.trim() });
 
-  const openAiMessages = [
-    ...systemMessages,
-    ...convertAnthropicToOpenAi(messages),
-  ];
-
-  // Use Groq's best available model (llama-3.3-70b-versatile)
+  const openAiMessages = [...systemMessages, ...convertAnthropicToOpenAi(messages)];
   const grokModel = 'llama-3.3-70b-versatile';
 
-  console.log(`[Grok] Starting stream: model=${grokModel}, tools=${tools.map(t => t.name).join(', ')||'none'}, messages=${messages.length}`);
-  for (const key of keys) {
+  console.log(`[Grok] Starting stream: model=${grokModel}, tools=${tools.map(t => t.name).join(', ')||'none'}`);
+
+  // v3.1.0 Token Bucket: try each key, skipping those in cooldown
+  for (let attempt = 0; attempt < allKeys.length; attempt++) {
+    const bucketKey = await getNextAvailableKey();
+    if (!bucketKey) {
+      console.warn('[TokenBucket] All Groq keys in cooldown');
+      throw new Error('All Groq keys are in cooldown');
+    }
+
+    const { key, index, masked } = bucketKey;
+    console.log(`[Grok] Trying key #${index} ${masked} at ${url}`);
+
+    yield { type: 'key_attempt' as const, keyMasked: masked, keyIndex: index, keyTotal: allKeys.length };
+
     try {
-      console.log(`[Grok] Trying key ...${key.slice(-6)} at ${url}`);
       const res = await fetch(url, {
         method: 'POST',
         headers: getGrokHeaders(key),
@@ -244,18 +251,25 @@ async function* tryGrokStream(
           temperature,
           max_tokens: maxTokens,
           stream: true,
+          stream_options: { include_usage: true },
         }),
       });
 
       if (!res.ok) {
         const txt = await res.text().catch(() => '<no body>');
-        console.warn(`[Grok] key failed status=${res.status} body=${txt}`);
+        console.warn(`[Grok] key #${index} ${masked} failed ${res.status}: ${txt.slice(0, 150)}`);
+        const errorType = res.status === 429 ? '429' : '5xx';
+        await markKeyCooldown(masked, errorType, `HTTP ${res.status}`);
+        yield { type: 'key_failed' as const, keyMasked: masked, keyIndex: index, status: res.status, rateLimit: res.status === 429 };
         continue;
       }
 
-      if (!res.body) continue;
+      if (!res.body) {
+        await markKeyCooldown(masked, 'empty', 'No response body');
+        continue;
+      }
 
-      const reader = res.body.getReader();
+      const reader  = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let currentToolCall: { id: string; name: string; arguments: string } | null = null;
@@ -263,7 +277,6 @@ async function* tryGrokStream(
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -271,69 +284,73 @@ async function* tryGrokStream(
         for (const line of lines) {
           const cleaned = line.trim();
           if (!cleaned || cleaned === 'data: [DONE]') continue;
-          if (cleaned.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(cleaned.slice(6));
-              if (data.error) {
-                console.error('[Grok Stream Error]:', data.error);
-                continue;
+          if (!cleaned.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(cleaned.slice(6));
+            if (data.error) {
+              console.error('[Grok Stream Error]:', data.error);
+              
+              // tool_use_failed = model couldn't format tool call correctly — non-retryable
+              if (data.error?.code === 'tool_use_failed') {
+                console.warn('[Grok] Model formatting error, emitting error response');
+                yield { 
+                  type: 'text' as const, 
+                  text: `[Internal] The LLM encountered an issue formatting its response. Please rephrase your question.` 
+                };
+                // Don't retry with this key for tool_use_failed — but also don't cooldown
+                // Just mark success and return (don't try other keys)
+                await markKeySuccess(masked);
+                return;
               }
-              const choice = data.choices?.[0];
-              if (!choice) continue;
-
-              const delta = choice.delta;
-              if (delta.content) {
-                yield { type: 'text' as const, text: delta.content };
-              }
-
-              if (delta.tool_calls && delta.tool_calls.length > 0) {
-                const tc = delta.tool_calls[0];
-                if (tc.function?.name) {
-                  if (currentToolCall) {
-                    try {
-                      const args = JSON.parse(currentToolCall.arguments);
-                      yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args };
-                    } catch {}
-                  }
-                  currentToolCall = {
-                    id: tc.id || `grok-tc-${Date.now()}`,
-                    name: tc.function.name,
-                    arguments: tc.function.arguments || '',
-                  };
-                } else if (tc.function?.arguments && currentToolCall) {
-                  currentToolCall.arguments += tc.function.arguments;
-                }
-              }
-
-              if (choice.finish_reason === 'tool_calls' || (choice.finish_reason && currentToolCall)) {
-                if (currentToolCall) {
-                  try {
-                    const args = JSON.parse(currentToolCall.arguments);
-                    yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args };
-                  } catch (e) {
-                    console.error('[Grok] Failed to parse tool call args:', currentToolCall.arguments);
-                  }
-                  currentToolCall = null;
-                }
-              }
-            } catch {
-              // ignore parse errors
+              
+              // Other errors (5xx, timeout) = retryable
+              await markKeyCooldown(masked, '5xx', String(data.error?.message ?? '').slice(0, 80));
+              continue;
             }
-          }
+            const choice = data.choices?.[0];
+            if (!choice) continue;
+            const delta = choice.delta;
+
+            if (delta?.content) yield { type: 'text' as const, text: delta.content };
+
+            if (data.usage?.prompt_tokens) {
+              yield { type: 'usage' as const, input_tokens: data.usage.prompt_tokens, output_tokens: data.usage.completion_tokens ?? 0 };
+            }
+
+            if (delta?.tool_calls?.length > 0) {
+              const tc = delta.tool_calls[0];
+              if (tc.function?.name) {
+                if (currentToolCall) {
+                  try { yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: JSON.parse(currentToolCall.arguments) }; } catch {}
+                }
+                currentToolCall = { id: tc.id || `grok-tc-${Date.now()}`, name: tc.function.name, arguments: tc.function.arguments || '' };
+              } else if (tc.function?.arguments && currentToolCall) {
+                currentToolCall.arguments += tc.function.arguments;
+              }
+            }
+
+            if ((choice.finish_reason === 'tool_calls' || (choice.finish_reason && currentToolCall)) && currentToolCall) {
+              try { yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: JSON.parse(currentToolCall.arguments) }; }
+              catch (e) { console.error('[Grok] Failed to parse tool call args:', currentToolCall.arguments); }
+              currentToolCall = null;
+            }
+          } catch { /* ignore parse errors */ }
         }
       }
 
       if (currentToolCall) {
-        try {
-          const args = JSON.parse(currentToolCall.arguments);
-          yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args };
-        } catch {}
+        try { yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: JSON.parse(currentToolCall.arguments) }; } catch {}
       }
 
-      return; // success, stop trying keys
-    } catch (err) {
-      console.warn('[Grok] request error', (err as Error).message);
-      continue;
+      await markKeySuccess(masked);
+      console.log(`[Grok] ✅ Key #${index} ${masked} succeeded`);
+      return;
+
+    } catch (err: any) {
+      const msg = String(err?.message ?? err);
+      console.warn(`[Grok] request error key #${index} ${masked}:`, msg);
+      await markKeyCooldown(masked, msg.includes('timeout') ? 'timeout' : '5xx', msg.slice(0, 80));
+      yield { type: 'key_failed' as const, keyMasked: masked, keyIndex: index, status: 0, rateLimit: false };
     }
   }
 
@@ -414,7 +431,7 @@ function formatFilterSummary(input: any): string {
   const typeParts: string[] = [];
   if (input.tType) typeParts.push(input.tType.toLowerCase());
   if (input.fType) typeParts.push(input.fType.toLowerCase());
-  if (input.seats) typeParts.push(`${input.seats}-seater`);
+  if (input.minSeats ?? input.seats) typeParts.push(`${input.minSeats ?? input.seats}-seater`);
   if (input.cType) {
     typeParts.push(input.cType.toUpperCase() + 's');
   } else {
@@ -423,39 +440,30 @@ function formatFilterSummary(input: any): string {
   parts.push(typeParts.join(' '));
 
   // 2. City
-  if (input.city) {
-    parts.push(`in ${input.city}`);
-  }
+  if (input.city) parts.push(`in ${input.city}`);
 
   // 3. Dates
   if (input.from) {
     try {
       const fromDate = new Date(input.from);
-      const toDate = input.to ? new Date(input.to) : null;
-      
+      const toDate   = input.to ? new Date(input.to) : null;
       const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
-      const fromStr = fromDate.toLocaleDateString('en-US', options);
-      
+      const fromStr = fromDate.toLocaleDateString('en-AU', options);
       if (toDate) {
-        const toStr = toDate.toLocaleDateString('en-US', options);
-        if (fromDate.getMonth() === toDate.getMonth() && fromDate.getFullYear() === toDate.getFullYear()) {
-          const toDay = toDate.getDate();
-          parts.push(`for ${fromStr}-${toDay}`);
+        const toStr = toDate.toLocaleDateString('en-AU', options);
+        if (fromDate.getMonth() === toDate.getMonth()) {
+          parts.push(`for ${fromStr}–${toDate.getDate()}`);
         } else {
           parts.push(`from ${fromStr} to ${toStr}`);
         }
       } else {
         parts.push(`on ${fromStr}`);
       }
-    } catch {
-      // ignore date format errors
-    }
+    } catch { /* ignore */ }
   }
 
   // 4. Max Price
-  if (input.maxPrice) {
-    parts.push(`under $${input.maxPrice}/day`);
-  }
+  if (input.maxPrice) parts.push(`under $${input.maxPrice}/day`);
 
   return parts.join(' ');
 }
@@ -488,9 +496,31 @@ async function* generateToolAwareMock(
         // ── CASE A: Parse as vehicle search results ──────────────────────────
         try {
           const parsed = JSON.parse(content);
-          const vehicles = Array.isArray(parsed) ? parsed : parsed?.results;
-          if (Array.isArray(vehicles)) {
-            if (vehicles.length === 0) {
+
+          // v3.1.0 masked format: { total_matching, total_raw, shown: MaskedVehicle[] }
+          // Legacy format: TSearchedCar[] or { results: TSearchedCar[] }
+          const isMasked = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'shown' in parsed;
+          const isLegacyArray = Array.isArray(parsed);
+          const isLegacyWrapped = parsed && typeof parsed === 'object' && Array.isArray(parsed?.results);
+
+          if (isMasked || isLegacyArray || isLegacyWrapped) {
+
+            // ── Normalise to a list of renderable vehicles ─────────────────
+            let renderList: any[] = [];
+            let totalMatching = 0;
+
+            if (isMasked) {
+              // v3.1.0: use shown[] directly — already masked
+              renderList    = parsed.shown ?? [];
+              totalMatching = parsed.total_matching ?? renderList.length;
+            } else {
+              // Legacy: raw TSearchedCar[]
+              const rawList = isLegacyArray ? parsed : parsed.results;
+              renderList    = rawList ?? [];
+              totalMatching = renderList.length;
+            }
+
+            if (renderList.length === 0) {
               const noResultsMsg = "I couldn't find any vehicles matching your criteria. Try adjusting your dates, location, or filtering rules.";
               const chunks = noResultsMsg.match(/.{1,16}/gs) || [noResultsMsg];
               for (const chunk of chunks) {
@@ -501,73 +531,72 @@ async function* generateToolAwareMock(
             }
 
             const tags: string[] = [];
-            const shownVehicles = vehicles.slice(0, 10);
-            
+            const shownVehicles = renderList.slice(0, 10);
+
             for (const v of shownVehicles) {
-              const id = v.listingId;
-              const make = v.car?.make ?? 'Unknown';
-              const model = v.car?.model ?? '';
-              const year = v.car?.year ?? 2022;
-              const dailyRate = v.rates?.dailyRates?.amount ?? 50;
-              const seats = v.car?.seats ?? 5;
-              const transmission = v.car?.transmissionType ?? 'Automatic';
-              const imageUrl = v.photos?.coverPhoto?.imageInfo?.secure_url ?? '';
-              
-              const vehicleJson = JSON.stringify({
-                id,
-                make,
-                model,
-                year,
-                dailyRate,
-                seats,
-                transmission,
-                imageUrl
-              });
-              tags.push(`[VEHICLE: ${vehicleJson}]`);
-            }
-            
-            let inputArgs: any = null;
-            const lastToolCall = messages.find(m => 
-              m.role === 'assistant' && Array.isArray(m.content) && 
-              m.content.some((c: any) => c.type === 'tool_use' && c.name === 'search_vehicles')
-            );
-            
-            if (lastToolCall) {
-              const toolUse = lastToolCall.content.find((c: any) => c.type === 'tool_use' && c.name === 'search_vehicles');
-              if (toolUse && toolUse.input) {
-                inputArgs = toolUse.input;
+              let id: number, make: string, model: string, dailyRate: number,
+                  seats: number, transmission: string, imageUrl: string;
+
+              if (isMasked) {
+                // v3.1.0 MaskedVehicle fields
+                const parts = (v.displayName ?? '').split(' ');
+                id           = v.listingId;
+                make         = parts[0] ?? 'Unknown';
+                model        = parts.slice(1).join(' ') || '';
+                dailyRate    = v.dailyRate ?? 0;
+                seats        = v.seats ?? 5;
+                transmission = v.transmission ?? 'Automatic';
+                imageUrl     = v.coverPhotoUrl ?? '';
+              } else {
+                // Legacy raw fields
+                id           = v.listingId;
+                make         = v.car?.make ?? 'Unknown';
+                model        = v.car?.model ?? '';
+                dailyRate    = v.rates?.dailyRates?.amount ?? 50;
+                seats        = v.car?.seats ?? 5;
+                transmission = v.car?.transmissionType ?? 'Automatic';
+                imageUrl     = v.photos?.coverPhoto?.imageInfo?.secure_url ?? '';
               }
+
+              tags.push(`[VEHICLE: ${JSON.stringify({ id, make, model, dailyRate, seats, transmission, imageUrl })}]`);
             }
 
-            if (vehicles.length > 10) {
-              const remaining = vehicles.length - 10;
-              let searchUrl = '/search';
-              
-              if (inputArgs) {
-                const queryParams = new URLSearchParams();
-                if (inputArgs.city) queryParams.set('city', inputArgs.city);
-                if (inputArgs.from) queryParams.set('from', inputArgs.from);
-                if (inputArgs.to) queryParams.set('to', inputArgs.to);
-                if (inputArgs.cType) queryParams.set('cType', inputArgs.cType);
-                if (inputArgs.tType) queryParams.set('tType', inputArgs.tType);
-                if (inputArgs.fType) queryParams.set('fType', inputArgs.fType);
-                if (inputArgs.seats) queryParams.set('seats', String(inputArgs.seats));
-                if (inputArgs.maxPrice) queryParams.set('maxPrice', String(inputArgs.maxPrice));
-                searchUrl = `/search?${queryParams.toString()}`;
-              }
-              
-              const viewMoreJson = JSON.stringify({
-                type: 'view_more',
-                remaining,
-                searchUrl
-              });
-              tags.push(`[VEHICLE: ${viewMoreJson}]`);
+            // Recover tool call input args for filter summary + View More URL
+            let inputArgs: any = null;
+            const lastToolCall = messages.find((m: any) =>
+              m.role === 'assistant' && Array.isArray(m.content) &&
+              m.content.some((c: any) => c.type === 'tool_use' && c.name === 'search_vehicles')
+            );
+            if (lastToolCall) {
+              const toolUse = lastToolCall.content.find(
+                (c: any) => c.type === 'tool_use' && c.name === 'search_vehicles'
+              );
+              if (toolUse?.input) inputArgs = toolUse.input;
             }
-            
+
+            // View More card when total_matching > 10
+            if (totalMatching > 10) {
+              const remaining = totalMatching - 10;
+              let searchUrl = '/search';
+              if (inputArgs) {
+                const qp = new URLSearchParams();
+                if (inputArgs.city)     qp.set('city',     inputArgs.city);
+                if (inputArgs.from)     qp.set('from',     inputArgs.from);
+                if (inputArgs.to)       qp.set('to',       inputArgs.to);
+                if (inputArgs.cType)    qp.set('cType',    inputArgs.cType);
+                if (inputArgs.tType)    qp.set('tType',    inputArgs.tType);
+                if (inputArgs.fType)    qp.set('fType',    inputArgs.fType);
+                if (inputArgs.minSeats) qp.set('seats',    String(inputArgs.minSeats));
+                if (inputArgs.maxPrice) qp.set('maxPrice', String(inputArgs.maxPrice));
+                searchUrl = `/search?${qp.toString()}`;
+              }
+              tags.push(`[VEHICLE: ${JSON.stringify({ type: 'view_more', remaining, searchUrl })}]`);
+            }
+
             const filterSummary = formatFilterSummary(inputArgs);
             const responseText = `Here are the available ${filterSummary} I found:\n\n` + tags.join(' ');
-            console.log(`[LLM Mock] Generating rich card response with ${shownVehicles.length} cards + ${vehicles.length > 10 ? 'View More' : 'none'}`);
-            
+            console.log(`[LLM Mock] Rich cards: ${shownVehicles.length} vehicles, total_matching=${totalMatching}`);
+
             const chunks = responseText.match(/.{1,16}/gs) || [responseText];
             for (const chunk of chunks) {
               yield { type: 'text' as const, text: chunk };
@@ -634,9 +663,48 @@ async function* generateToolAwareMock(
           // Not details JSON
         }
         
-        // ── CASE C: Summarise other tool results (e.g. vouchers, KB) ──────────
+        // ── CASE C: Knowledge base / vouchers / other tool results ──────────
         if (content && content !== 'null' && !content.includes('"error"')) {
-          const summary = `Here's the details:\n\n${content.slice(0, 800)}`;
+
+          // Strip the dedup cache system prefix if present
+          const stripped = content.replace(
+            /^\[System:.*?\]\n\n/s,
+            ''
+          ).trim();
+
+          // Detect KB/document content by looking for [AUTHORITATIVE] or [SOURCE:] tags
+          const isKBContent = stripped.includes('[AUTHORITATIVE') || stripped.includes('[SOURCE:');
+
+          if (isKBContent) {
+            // Format KB content as a proper answer
+            // Strip the tag prefixes for a cleaner presentation
+            const cleaned = stripped
+              .replace(/\[AUTHORITATIVE — ADMIN OVERRIDE\]\n?/g, '')
+              .replace(/\[SOURCE:[^\]]+\]\n?/g, '')
+              .trim();
+
+            // Get the original user question for context
+            const originalMsg = messages.find((m: any) => m.role === 'user')?.content ?? '';
+            const userQ = typeof originalMsg === 'string'
+              ? originalMsg
+              : (Array.isArray(originalMsg)
+                  ? originalMsg.find((c: any) => c.type === 'text')?.text ?? ''
+                  : '');
+
+            const response = cleaned.length > 0
+              ? `Based on our documentation:\n\n${cleaned.slice(0, 1200)}${cleaned.length > 1200 ? '\n\n_For full details, please review our complete policy documentation._' : ''}`
+              : "I found some relevant information in our knowledge base, but couldn't extract a clear answer. Please contact support@tashus.com for assistance.";
+
+            const chunks = response.match(/.{1,16}/gs) || [response];
+            for (const chunk of chunks) {
+              yield { type: 'text' as const, text: chunk };
+              await new Promise((resolve) => setTimeout(resolve, 8));
+            }
+            return;
+          }
+
+          // Voucher or other structured result — clean summary
+          const summary = stripped.slice(0, 800);
           const chunks = summary.match(/.{1,16}/gs) || [summary];
           for (const chunk of chunks) {
             yield { type: 'text' as const, text: chunk };

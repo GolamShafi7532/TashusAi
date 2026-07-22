@@ -3,7 +3,7 @@
  */
 
 export interface StreamChunk {
-  type: 'text' | 'tool_call' | 'usage';
+  type: 'text' | 'tool_call' | 'usage' | 'key_attempt' | 'key_failed';
   // text chunk
   text?: string;
   // tool call
@@ -13,6 +13,12 @@ export interface StreamChunk {
   // token usage
   input_tokens?: number;
   output_tokens?: number;
+  // key tracking
+  keyMasked?: string;
+  keyIndex?: number;
+  keyTotal?: number;
+  status?: number;
+  rateLimit?: boolean;
 }
 
 export interface LLMCallParams {

@@ -8,20 +8,31 @@ import { NextResponse } from 'next/server';
 import { processMessageStream } from '@/agent/orchestrator';
 import { redis } from '@/lib/redis';
 import { randomUUID } from 'crypto';
+import type { UserContext } from '@/app/api/ai/chat/stream/route';
 
 type TestStreamBody = {
   message: string;
   testSessionId?: string;
 };
 
+function getCorsHeaders() {
+  // In development, allow all origins. In production, restrict to your domain.
+  const isDev = process.env.NODE_ENV === 'development';
+  const origin = isDev ? '*' : (process.env.CORS_ORIGIN || 'https://www.tashus.com');
+  
+  return {
+    'Access-Control-Allow-Origin': origin,
+    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
+    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+  };
+}
+
 function sseHeaders() {
   return new Headers({
     'Content-Type': 'text/event-stream; charset=utf-8',
     'Cache-Control': 'no-cache, no-transform',
     Connection: 'keep-alive',
-    'Access-Control-Allow-Origin': 'http://localhost:3000',
-    'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-    'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+    ...getCorsHeaders(),
   });
 }
 
@@ -69,7 +80,11 @@ export async function POST(req: Request) {
       ctrl.enqueue(new TextEncoder().encode(encodeEvent('meta', { testSessionId, isTestMode: true })));
 
       try {
-        const orchestratorStream = processMessageStream(testSessionId, message);
+        const orchestratorStream = processMessageStream(testSessionId, message, {
+          timezone: 'Australia/Sydney',  // sensible default for test console
+          localTime: new Date().toISOString(),
+          timezoneOffset: -600,
+        });
 
         for await (const event of orchestratorStream) {
           if (event.type === 'token') {
@@ -79,17 +94,22 @@ export async function POST(req: Request) {
             toolCalls.push({ tool: event.tool, input: event.input, status: 'running' });
             ctrl.enqueue(new TextEncoder().encode(encodeEvent('tool_start', { tool: event.tool, input: event.input })));
           } else if (event.type === 'tool_result') {
-            // Update tool call with result
             const toolIndex = toolCalls.findIndex(t => t.tool === event.tool);
             if (toolIndex >= 0) {
               toolCalls[toolIndex].status = 'completed';
               toolCalls[toolIndex].result = event.result;
             }
             ctrl.enqueue(new TextEncoder().encode(encodeEvent('tool_result', { tool: event.tool, result: event.result })));
+          } else if ((event as any).type === 'key_attempt') {
+            // Forward key-attempt event so the UI can show which key is being tried
+            ctrl.enqueue(new TextEncoder().encode(encodeEvent('key_attempt', event)));
+          } else if ((event as any).type === 'key_failed') {
+            // Forward key-failed event so the UI can highlight the failed key in red
+            ctrl.enqueue(new TextEncoder().encode(encodeEvent('key_failed', event)));
           } else if (event.type === 'done') {
             sources = event.sources || [];
-            ctrl.enqueue(new TextEncoder().encode(encodeEvent('done', { 
-              message: event.message, 
+            ctrl.enqueue(new TextEncoder().encode(encodeEvent('done', {
+              message: event.message,
               sources: event.sources,
               toolCalls,
             })));
@@ -135,9 +155,7 @@ export async function OPTIONS(req: Request) {
   return new NextResponse(null, {
     status: 200,
     headers: new Headers({
-      'Access-Control-Allow-Origin': 'http://localhost:3000',
-      'Access-Control-Allow-Methods': 'GET, POST, OPTIONS',
-      'Access-Control-Allow-Headers': 'Content-Type, Authorization',
+      ...getCorsHeaders(),
       'Access-Control-Max-Age': '86400',
     }),
   });

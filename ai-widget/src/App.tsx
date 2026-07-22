@@ -22,15 +22,12 @@ export default function App({ jwtCookieName }: AppProps) {
   } = useChatStream(jwtCookieName);
 
   const handleToggle = () => {
-    if (!isOpen) {
-      clearUnread();
-    }
+    if (!isOpen) clearUnread();
     setIsOpen(!isOpen);
   };
 
   return (
     <div
-      className="tashus-widget-wrapper"
       style={{
         position: 'fixed',
         bottom: '20px',
@@ -38,7 +35,7 @@ export default function App({ jwtCookieName }: AppProps) {
         display: 'flex',
         flexDirection: 'column',
         alignItems: 'flex-end',
-        gap: '12px',
+        gap: '10px',
         zIndex: 999999,
         pointerEvents: 'auto',
       }}

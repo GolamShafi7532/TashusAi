@@ -1,27 +1,8 @@
 'use strict';
 import React from 'react';
 
-/**
- * VehicleResultCard (v3.1.0 — Phase C.5)
- *
- * Accepts two payload shapes:
- *
- * 1. Masked format (v3.1.0 FilteredSearchResult.shown[]):
- *    { listingId, displayName, carType, seats, transmission, fuelType,
- *      dailyRate, hourlyRate, location, coverPhotoUrl, hostRating? }
- *
- * 2. Legacy inline tag format (LLM mock / pre-filter):
- *    { id, make, model, year?, dailyRate, seats, transmission, imageUrl }
- *
- * 3. "View More" card:
- *    { type: 'view_more', remaining, searchUrl }
- *
- * The normalise() function maps both shapes to a common internal structure
- * so the render stays clean.
- */
-
-// ── Masked vehicle shape (v3.1.0) ─────────────────────────────────────────────
-interface MaskedVehicleProps {
+/* ── Shape definitions ──────────────────────────────────────────── */
+interface MaskedVehicle {
   listingId?: number;
   displayName?: string;
   carType?: string;
@@ -29,14 +10,11 @@ interface MaskedVehicleProps {
   transmission?: string;
   fuelType?: string;
   dailyRate?: number;
-  hourlyRate?: number;
   location?: { city: string; state: string };
   coverPhotoUrl?: string;
   hostRating?: number;
 }
-
-// ── Legacy inline tag shape ───────────────────────────────────────────────────
-interface LegacyVehicleProps {
+interface LegacyVehicle {
   id?: string | number;
   make?: string;
   model?: string;
@@ -46,20 +24,14 @@ interface LegacyVehicleProps {
   transmission?: string;
   imageUrl?: string;
 }
-
-// ── View More card ────────────────────────────────────────────────────────────
-interface ViewMoreProps {
+interface ViewMore {
   type: 'view_more';
   remaining?: number;
   searchUrl?: string;
 }
+type VehicleProps = (MaskedVehicle | LegacyVehicle | ViewMore) & { type?: string };
 
-type VehicleProps = (MaskedVehicleProps | LegacyVehicleProps | ViewMoreProps) & {
-  type?: string;
-};
-
-// ── Internal normalised shape ─────────────────────────────────────────────────
-interface NormalisedVehicle {
+interface Normalised {
   id: string | number;
   displayName: string;
   dailyRate: number;
@@ -72,145 +44,222 @@ interface NormalisedVehicle {
   hostRating?: number;
 }
 
-function normalise(vehicle: VehicleProps): NormalisedVehicle {
-  const v = vehicle as any;
-
-  // v3.1.0 masked format — has listingId + displayName + coverPhotoUrl
+function normalise(v: any): Normalised {
   if (v.listingId !== undefined || v.coverPhotoUrl !== undefined || v.displayName !== undefined) {
     return {
-      id:           v.listingId ?? 0,
-      displayName:  v.displayName ?? 'Vehicle',
-      dailyRate:    v.dailyRate ?? 0,
-      seats:        v.seats,
+      id: v.listingId ?? 0,
+      displayName: v.displayName ?? 'Vehicle',
+      dailyRate: v.dailyRate ?? 0,
+      seats: v.seats,
       transmission: v.transmission,
-      fuelType:     v.fuelType,
-      carType:      v.carType,
-      imageUrl:     v.coverPhotoUrl ?? '',
+      fuelType: v.fuelType,
+      carType: v.carType,
+      imageUrl: v.coverPhotoUrl ?? '',
       locationLabel: v.location ? `${v.location.city}, ${v.location.state}` : undefined,
-      hostRating:   v.hostRating,
+      hostRating: v.hostRating,
     };
   }
-
-  // Legacy inline tag format — has id + make + model + imageUrl
   const name = [v.make, v.model, v.year ? `(${v.year})` : ''].filter(Boolean).join(' ');
   return {
-    id:           v.id ?? 0,
-    displayName:  name || 'Vehicle',
-    dailyRate:    v.dailyRate ?? 0,
-    seats:        v.seats,
+    id: v.id ?? 0,
+    displayName: name || 'Vehicle',
+    dailyRate: v.dailyRate ?? 0,
+    seats: v.seats,
     transmission: v.transmission,
-    imageUrl:     v.imageUrl ?? '',
+    imageUrl: v.imageUrl ?? '',
   };
 }
 
-// ── Component ─────────────────────────────────────────────────────────────────
+/* ── Component — fixed 158px wide ──────────────────────────────── */
 export default function VehicleResultCard({ vehicle }: { vehicle: VehicleProps }) {
 
-  // ── View More card ──────────────────────────────────────────────────────────
+  /* View More */
   if ((vehicle as any).type === 'view_more') {
-    const vm = vehicle as ViewMoreProps;
-    const handleViewMore = () => {
-      window.parent.location.href = vm.searchUrl || '/search';
-    };
-
+    const vm = vehicle as ViewMore;
     return (
-      <div className="w-full h-full bg-[#0F161E] border border-dashed border-[#F2994A]/40 rounded-xl overflow-hidden shadow-md my-2 flex flex-col items-center justify-center text-center min-h-[260px] p-4">
-        <div className="flex-1 flex flex-col items-center justify-center">
-          <div className="w-14 h-14 rounded-full bg-[#F2994A]/10 border border-[#F2994A]/30 flex items-center justify-center text-[#F2994A] text-lg font-black mb-3">
-            +{vm.remaining ?? 0}
-          </div>
-          <h4 className="font-bold text-white text-xs mb-1">More Vehicles</h4>
-          <p className="text-[9px] text-[#94A3B8] leading-relaxed px-2">
-            See all matching results on Tashus
-          </p>
+      <div
+        onClick={() => { window.parent.location.href = vm.searchUrl || '/search'; }}
+        style={{
+          width: '158px',
+          height: '180px',
+          background: 'rgba(128,19,127,0.04)',
+          border: '1px dashed rgba(128,19,127,0.25)',
+          borderRadius: '12px',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          cursor: 'pointer',
+          gap: '8px',
+          padding: '12px',
+          transition: 'all 0.15s',
+        }}
+        onMouseEnter={e => {
+          (e.currentTarget as HTMLDivElement).style.background = 'rgba(128,19,127,0.08)';
+          (e.currentTarget as HTMLDivElement).style.borderColor = 'rgba(128,19,127,0.4)';
+        }}
+        onMouseLeave={e => {
+          (e.currentTarget as HTMLDivElement).style.background = 'rgba(128,19,127,0.04)';
+          (e.currentTarget as HTMLDivElement).style.borderColor = 'rgba(128,19,127,0.25)';
+        }}
+      >
+        <div style={{
+          width: '36px', height: '36px', borderRadius: '50%',
+          background: 'rgba(128,19,127,0.12)',
+          border: '1px solid rgba(128,19,127,0.25)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '12px', fontWeight: 800, color: '#80137f',
+        }}>
+          +{vm.remaining ?? 0}
         </div>
-        <button
-          onClick={handleViewMore}
-          className="w-full mt-3 bg-[#F2994A] hover:bg-[#d97f2e] text-white text-[10px] font-bold py-2 rounded-lg transition-all text-center uppercase tracking-wider"
-        >
-          View All
-        </button>
+        <div style={{ fontSize: '11px', fontWeight: 700, color: '#1a1a1a', textAlign: 'center' }}>More vehicles</div>
+        <div style={{ fontSize: '9px', color: 'rgba(0,0,0,0.45)', textAlign: 'center', lineHeight: 1.4 }}>
+          See all on Tashus
+        </div>
       </div>
     );
   }
 
-  // ── Standard vehicle card ───────────────────────────────────────────────────
   const v = normalise(vehicle);
-
-  const handleViewDetails = () => {
-    window.parent.location.href = `/search/${v.id}/vehicle-details`;
-  };
-
-  const formattedRate = new Intl.NumberFormat('en-AU', {
-    style: 'currency',
-    currency: 'AUD',
-    maximumFractionDigits: 0,
-  }).format(v.dailyRate);
+  const rate = new Intl.NumberFormat('en-AU', { style: 'currency', currency: 'AUD', maximumFractionDigits: 0 }).format(v.dailyRate);
 
   return (
-    <div className="w-full bg-[#0F161E] border border-[#1E293B] rounded-xl overflow-hidden shadow-md my-2 flex flex-col">
-      {/* Cover photo */}
-      {v.imageUrl ? (
-        <img
-          src={v.imageUrl}
-          alt={v.displayName}
-          className="w-full h-28 object-cover bg-[#090D11]"
-          onError={(e) => {
-            (e.target as HTMLImageElement).src =
-              'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=500&auto=format&fit=crop&q=60';
-          }}
-        />
-      ) : (
-        <div className="w-full h-28 bg-[#090D11] flex items-center justify-center text-xs text-[#94A3B8]">
-          No Image
+    <div
+      style={{
+        width: '158px',
+        background: 'rgba(255,255,255,0.9)',
+        border: '1px solid rgba(128,19,127,0.15)',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        transition: 'all 0.15s',
+        boxShadow: '0 2px 8px rgba(128,19,127,0.08)',
+      }}
+      onMouseEnter={e => {
+        (e.currentTarget as HTMLDivElement).style.borderColor = 'rgba(128,19,127,0.35)';
+        (e.currentTarget as HTMLDivElement).style.boxShadow = '0 4px 16px rgba(128,19,127,0.15)';
+        (e.currentTarget as HTMLDivElement).style.transform = 'translateY(-2px)';
+      }}
+      onMouseLeave={e => {
+        (e.currentTarget as HTMLDivElement).style.borderColor = 'rgba(128,19,127,0.15)';
+        (e.currentTarget as HTMLDivElement).style.boxShadow = '0 2px 8px rgba(128,19,127,0.08)';
+        (e.currentTarget as HTMLDivElement).style.transform = 'translateY(0)';
+      }}
+    >
+      {/* Image */}
+      <div style={{ position: 'relative', width: '100%', height: '80px', background: '#0a0a0a', flexShrink: 0 }}>
+        {v.imageUrl ? (
+          <img
+            src={v.imageUrl}
+            alt={v.displayName}
+            style={{ width: '100%', height: '80px', objectFit: 'cover', display: 'block' }}
+            onError={(e) => {
+              (e.target as HTMLImageElement).src =
+                'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=400&auto=format&fit=crop&q=60';
+            }}
+          />
+        ) : (
+          <div style={{
+            width: '100%', height: '80px', display: 'flex',
+            alignItems: 'center', justifyContent: 'center', color: 'rgba(255,255,255,0.2)', fontSize: '11px',
+          }}>No image</div>
+        )}
+        {/* Gradient overlay */}
+        <div style={{
+          position: 'absolute', inset: 0,
+          background: 'linear-gradient(to top, rgba(0,0,0,0.7) 0%, transparent 55%)',
+        }} />
+        {/* Price badge */}
+        <div style={{
+          position: 'absolute', bottom: '5px', right: '5px',
+          background: 'rgba(0,0,0,0.75)',
+          backdropFilter: 'blur(4px)',
+          border: '1px solid rgba(255,255,255,0.12)',
+          borderRadius: '6px',
+          padding: '2px 6px',
+          fontSize: '10px', fontWeight: 800, color: '#fff',
+          lineHeight: 1.4,
+        }}>
+          {rate}
+          <span style={{ fontSize: '8px', fontWeight: 500, color: 'rgba(255,255,255,0.6)', marginLeft: '1px' }}>/day</span>
         </div>
-      )}
+      </div>
 
-      <div className="p-3 flex-1 flex flex-col justify-between">
-        <div>
-          {/* Name */}
-          <h4 className="font-bold text-white text-[11px] leading-snug truncate">
-            {v.displayName}
-          </h4>
+      {/* Details */}
+      <div style={{ padding: '8px 9px 9px', flex: 1, display: 'flex', flexDirection: 'column', gap: '5px' }}>
+        {/* Name */}
+        <div style={{
+          fontSize: '11px', fontWeight: 700, color: '#1a1a1a',
+          lineHeight: 1.3,
+          display: '-webkit-box',
+          WebkitLineClamp: 2,
+          WebkitBoxOrient: 'vertical',
+          overflow: 'hidden',
+          minHeight: '28px',
+        }}>
+          {v.displayName}
+        </div>
 
-          {/* carType badge */}
+        {/* Specs */}
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
           {v.carType && (
-            <span className="text-[8px] text-[#20B9BE] font-semibold uppercase tracking-wide">
-              {v.carType}
-            </span>
+            <span style={{
+              fontSize: '8px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+              color: '#80137f',
+              background: 'rgba(128,19,127,0.1)', border: '1px solid rgba(128,19,127,0.2)',
+              padding: '2px 4px', borderRadius: '4px',
+            }}>{v.carType}</span>
           )}
-
-          {/* Price */}
-          <div className="flex items-center justify-between mt-1.5">
-            <span className="text-[10px] font-bold text-[#20B9BE] whitespace-nowrap">
-              {formattedRate}/day
-            </span>
-            {/* Host rating if present */}
-            {v.hostRating !== undefined && v.hostRating > 0 && (
-              <span className="text-[9px] text-[#F2994A] font-semibold">
-                ⭐ {v.hostRating}
-              </span>
-            )}
-          </div>
-
-          {/* Specs row */}
-          <div className="flex items-center gap-2 text-[9px] text-[#94A3B8] mt-1.5 font-semibold flex-wrap">
-            {v.seats      && <span>👤 {v.seats}</span>}
-            {v.transmission && <span>⚙ {v.transmission}</span>}
-            {v.fuelType   && <span>⛽ {v.fuelType}</span>}
-          </div>
-
-          {/* Location label (v3.1.0 only) */}
-          {v.locationLabel && (
-            <div className="text-[8px] text-[#94A3B8] mt-1 truncate">
-              📍 {v.locationLabel}
-            </div>
+          {v.seats && (
+            <span style={{
+              fontSize: '8px', color: 'rgba(0,0,0,0.5)', fontWeight: 500,
+              background: 'rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.08)',
+              padding: '2px 4px', borderRadius: '4px',
+            }}>👤 {v.seats}</span>
+          )}
+          {v.transmission && (
+            <span style={{
+              fontSize: '8px', color: 'rgba(0,0,0,0.5)', fontWeight: 500,
+              background: 'rgba(0,0,0,0.04)', border: '1px solid rgba(0,0,0,0.08)',
+              padding: '2px 4px', borderRadius: '4px',
+            }}>{v.transmission}</span>
           )}
         </div>
 
+        {/* Location + rating */}
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto', minHeight: '16px' }}>
+          {v.locationLabel && (
+            <span style={{ fontSize: '8px', color: 'rgba(0,0,0,0.4)', overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '90px' }}>
+              📍 {v.locationLabel}
+            </span>
+          )}
+          {v.hostRating !== undefined && v.hostRating > 0 && (
+            <span style={{ fontSize: '8px', color: '#f97316', fontWeight: 700, flexShrink: 0 }}>
+              ⭐ {v.hostRating}
+            </span>
+          )}
+        </div>
+
+        {/* CTA */}
         <button
-          onClick={handleViewDetails}
-          className="w-full mt-2.5 bg-[#F2994A] hover:bg-[#d97f2e] text-white text-[9px] font-bold py-1.5 rounded-lg transition-all text-center uppercase tracking-wider"
+          onClick={() => { window.parent.location.href = `/search/${v.id}/vehicle-details`; }}
+          style={{
+            width: '100%',
+            padding: '6px 0',
+            marginTop: '3px',
+            background: 'linear-gradient(135deg, #80137f 0%, #9d1b9c 100%)',
+            border: 'none',
+            borderRadius: '8px',
+            color: '#fff',
+            fontSize: '9px',
+            fontWeight: 700,
+            letterSpacing: '0.04em',
+            cursor: 'pointer',
+            transition: 'opacity 0.15s',
+          }}
+          onMouseEnter={e => { e.currentTarget.style.opacity = '0.85'; }}
+          onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
         >
           View Details
         </button>

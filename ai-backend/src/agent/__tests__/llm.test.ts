@@ -46,4 +46,20 @@ describe('Grok LLM integration', () => {
     );
     expect(init?.headers).not.toHaveProperty('x-api-key');
   });
+
+  it('rotates to the next Grok key on subsequent calls', async () => {
+    process.env.GROK_API_KEYS = 'gsk_key_one,gsk_key_two';
+
+    const { generateCompletion } = await import('../llm');
+
+    await generateCompletion('hello');
+    await generateCompletion('hello again');
+
+    expect(global.fetch).toHaveBeenCalledTimes(2);
+    const firstHeaders = (global.fetch as jest.Mock).mock.calls[0][1]?.headers;
+    const secondHeaders = (global.fetch as jest.Mock).mock.calls[1][1]?.headers;
+
+    expect(firstHeaders).toEqual(expect.objectContaining({ Authorization: 'Bearer gsk_key_one' }));
+    expect(secondHeaders).toEqual(expect.objectContaining({ Authorization: 'Bearer gsk_key_two' }));
+  });
 });

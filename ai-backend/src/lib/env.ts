@@ -51,6 +51,14 @@ const envSchema = z.object({
   // OpenRouter API key — optional; enables 3rd-provider fallback
   OPENROUTER_API_KEY: z.string().optional(),
 
+  // ── Widget CORS ───────────────────────────────────────────────────────────
+  // Comma-separated list of origins allowed to load the widget.
+  // Examples:
+  //   Development:  http://localhost:3000,http://localhost:5173
+  //   Production:   https://tashus.com,https://www.tashus.com
+  // Use * to allow ALL origins (only for development / internal tools).
+  WIDGET_ALLOWED_ORIGINS: z.string().default('*'),
+
   // ── Observability (separate Sentry project from Tashus) ───────────────────
   SENTRY_DSN_AI: z.string().url().optional(),
 });

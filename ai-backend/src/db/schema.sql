@@ -185,12 +185,19 @@ create table ai_tool_call_logs (
     response_summary jsonb,
     cache_hit        boolean not null default false,
     duration_ms      int,
+    -- v3.1.0: token tracking (nullable — only set for LLM-turn logs, not raw tool calls)
+    tokens_in        int,
+    tokens_out       int,
+    token_cost_usd   numeric(12,8),
+    provider         text,           -- 'groq' | 'openrouter' | 'anthropic'
     created_at       timestamptz not null default now()
 );
 
 create index idx_tool_logs_session    on ai_tool_call_logs(session_id);
 create index idx_tool_logs_created_at on ai_tool_call_logs(created_at desc);
 create index idx_tool_logs_tool_name  on ai_tool_call_logs(tool_name);
+-- v3.1.0: index for token cost queries (daily/monthly aggregation)
+create index idx_tool_logs_provider   on ai_tool_call_logs(provider, created_at desc);
 
 -- =========================================================
 -- 6. FUTURE-MODULE PLACEHOLDER TABLES (Pillar 4)

@@ -22,10 +22,19 @@ jest.mock('@/lib/env', () => ({
 
 const mockGet = jest.fn();
 const mockSet = jest.fn();
+const mockUpdate = jest.fn();
 jest.mock('@/lib/redis', () => ({
   redis: {
     get: (...args: any[]) => mockGet(...args),
     set: (...args: any[]) => mockSet(...args),
+    hincrby: jest.fn().mockResolvedValue(1),
+    hincrbyfloat: jest.fn().mockResolvedValue(1),
+    zadd: jest.fn().mockResolvedValue(1),
+    zremrangebyrank: jest.fn().mockResolvedValue(1),
+    lpush: jest.fn().mockResolvedValue(1),
+    ltrim: jest.fn().mockResolvedValue(1),
+    expire: jest.fn().mockResolvedValue(1),
+    hgetall: jest.fn().mockResolvedValue({}),
   },
   getRedisSubscriber: jest.fn().mockReturnValue({
     subscribe: jest.fn().mockResolvedValue(1),
@@ -64,6 +73,10 @@ function chainable(resolvedValue: any): any {
         single: jest.fn().mockResolvedValue({ data: { id: 'inserted-id' }, error: null }),
       }),
     };
+  });
+  self.update = jest.fn().mockImplementation((...args: any[]) => {
+    mockUpdate(...args);
+    return self;
   });
   return self;
 }
@@ -308,5 +321,39 @@ describe('Orchestrator — processMessageStream', () => {
         latency_ms: expect.any(Number),
       })
     );
+  });
+
+  test('backfills token metrics onto tool-call audit rows after a turn completes', async () => {
+    let round = 0;
+    mockGenerateStream.mockImplementation(async function* () {
+      if (round === 0) {
+        round++;
+        yield { type: 'usage', input_tokens: 120, output_tokens: 45 };
+        yield {
+          type: 'tool_call',
+          id: 'tool-audit',
+          name: 'check_availability',
+          args: { carListingId: 42 },
+        };
+      } else {
+        yield { type: 'text', text: 'Token-backed audit response.' };
+      }
+    });
+
+    const generator = processMessageStream('session-123', 'Audit token flow');
+    for await (const _ of generator) {
+      // consume stream
+    }
+
+    const matchedPayloads = mockUpdate.mock.calls.filter(([payload]) => (
+      typeof payload?.tokens_in === 'number' &&
+      payload.tokens_in > 0 &&
+      typeof payload?.tokens_out === 'number' &&
+      payload.tokens_out > 0 &&
+      payload?.provider === 'anthropic' &&
+      typeof payload?.token_cost_usd === 'number'
+    ));
+
+    expect(matchedPayloads.length).toBeGreaterThan(0);
   });
 });
