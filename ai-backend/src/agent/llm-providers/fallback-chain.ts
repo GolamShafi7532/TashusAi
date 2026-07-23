@@ -33,7 +33,7 @@ interface CircuitState {
 }
 
 const CIRCUIT_COOLDOWN_MS = 60_000;   // 60 s before retry
-const REQUEST_TIMEOUT_MS  = 8_000;    // 8 s hard timeout per provider attempt
+const REQUEST_TIMEOUT_MS  = 45_000;   // 45 s — tool calls need time to think + stream
 
 const circuitState = new Map<string, CircuitState>();
 
@@ -58,9 +58,13 @@ function isRetryable(err: any): boolean {
   const retryableStatuses = [429, 500, 502, 503, 504];
   return (
     retryableStatuses.includes(err?.status) ||
+    err?.code === 'tool_use_failed' ||
     String(err?.message).toLowerCase().includes('rate limit') ||
     String(err?.message).toLowerCase().includes('timeout') ||
-    String(err?.message).toLowerCase().includes('econnreset')
+    String(err?.message).toLowerCase().includes('econnreset') ||
+    String(err?.message).toLowerCase().includes('tool_use_failed') ||
+    String(err?.message).toLowerCase().includes('all grok keys') ||
+    String(err?.message).toLowerCase().includes('all groq keys')
   );
 }
 
@@ -144,7 +148,10 @@ export async function* streamWithFallback(
       let yieldedAny = false;
 
       for await (const chunk of withTimeout(provider.stream(params), REQUEST_TIMEOUT_MS, provider.name)) {
-        yieldedAny = true;
+        // Only count actual LLM output (text / tool_call / usage) as meaningful.
+        // Internal metadata like key_attempt / key_failed are not real output.
+        const isRealOutput = chunk && (chunk.type === 'text' || chunk.type === 'tool_call' || chunk.type === 'usage');
+        if (isRealOutput) yieldedAny = true;
         yield chunk;
       }
 

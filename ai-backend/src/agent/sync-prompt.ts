@@ -31,8 +31,7 @@ async function sync() {
 
     if (!existing) {
       console.log('No active config found in database. Creating a new default config...');
-      const { error: insertError } = await db
-        .from('ai_agent_configs')
+      const { error: insertError } = await (db.from('ai_agent_configs') as any)
         .insert({
           config_key: 'default',
           system_prompt: prompt,
@@ -48,7 +47,7 @@ async function sync() {
             'escalate_to_human',
           ],
           is_active: true,
-        } as any);
+        });
 
       if (insertError) {
         throw new Error(`Failed to insert default config: ${insertError.message}`);
@@ -56,12 +55,11 @@ async function sync() {
       console.log('✅ Default config created successfully.');
     } else {
       console.log(`Updating active agent config (ID: ${existing.id}, Key: ${existing.config_key})...`);
-      const { error: updateError } = await db
-        .from('ai_agent_configs')
+      const { error: updateError } = await (db.from('ai_agent_configs') as any)
         .update({
           system_prompt: prompt,
           updated_at: new Date().toISOString(),
-        } as any)
+        })
         .eq('id', existing.id);
 
       if (updateError) {

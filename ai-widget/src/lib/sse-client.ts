@@ -88,21 +88,95 @@ export async function fetchOrCreateSession(visitorId: string): Promise<string> {
 }
 
 /**
- * Fetch full message history for a session.
+ * Fetch full message history and circuit-breaker state for a session.
  */
-export async function fetchHistory(sessionId: string): Promise<Array<{
-  id: string;
-  role: string;
-  content: string;
-  created_at: string;
-}>> {
+export async function fetchHistory(sessionId: string): Promise<{
+  messages: Array<{
+    id: string;
+    role: string;
+    content: string;
+    created_at: string;
+    admin_display_name?: string;
+  }>;
+  is_ai_paused: boolean;
+  status: string;
+}> {
   const backendUrl = getBackendUrl();
   const res = await fetch(`${backendUrl}/api/ai/chat/${sessionId}/history`, {
     credentials: 'include',
   });
-  if (!res.ok) return [];
+  if (!res.ok) return { messages: [], is_ai_paused: false, status: 'active' };
   const data = await res.json();
-  return data.messages || [];
+  return {
+    messages: data.messages || [],
+    is_ai_paused: data.is_ai_paused ?? false,
+    status: data.status ?? 'active',
+  };
+}
+
+/**
+ * Real-time SSE stream listener for background admin messages and control events.
+ */
+export function openSessionControlStream(
+  sessionId: string,
+  onEvent: (event: any) => void
+): () => void {
+  const backendUrl = getBackendUrl();
+  const url = `${backendUrl}/api/ai/session/${sessionId}/stream`;
+  let es: EventSource | null = null;
+
+  try {
+    es = new EventSource(url, { withCredentials: true });
+
+    es.addEventListener('admin_message', (ev) => {
+      try { onEvent({ type: 'admin_message', ...JSON.parse(ev.data) }); } catch {}
+    });
+
+    es.addEventListener('control', (ev) => {
+      try { onEvent({ type: 'control', ...JSON.parse(ev.data) }); } catch {}
+    });
+
+    es.addEventListener('message', (ev) => {
+      try { onEvent({ type: 'message', ...JSON.parse(ev.data) }); } catch {}
+    });
+  } catch (e) {
+    console.warn('[SessionControlStream] Failed to connect SSE stream:', e);
+  }
+
+  return () => {
+    if (es) es.close();
+  };
+}
+
+/**
+ * Poll session state for admin messages and circuit-breaker changes.
+ * Called every 2 seconds by the widget to receive admin messages reliably as fallback.
+ */
+export async function pollSessionState(
+  sessionId: string,
+  since: string
+): Promise<{
+  is_ai_paused: boolean;
+  status: string;
+  messages: Array<{
+    id: string;
+    role: string;
+    content: string;
+    created_at: string;
+    admin_display_name?: string;
+  }>;
+} | null> {
+  try {
+    const backendUrl = getBackendUrl();
+    const res = await fetch(
+      `${backendUrl}/api/ai/session/${sessionId}/poll?since=${encodeURIComponent(since)}`,
+      { credentials: 'include' }
+    );
+    if (!res.ok) return null;
+    return await res.json();
+  } catch {
+    return null;
+  }
 }
 
 /**

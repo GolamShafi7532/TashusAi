@@ -12,6 +12,7 @@ const DEFAULT_ENABLED_TOOLS = [
   'check_availability',
   'validate_voucher',
   'search_knowledge_base',
+  'escalate_to_human',
 ];
 
 export async function loadDefaultSystemPrompt(): Promise<string> {

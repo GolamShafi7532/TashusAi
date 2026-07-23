@@ -1,5 +1,7 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db/client';
+
+export const dynamic = 'force-dynamic';
 import { processMessageStream } from '@/agent/orchestrator';
 import { getRedisSubscriber, buildSessionControlChannel, redis } from '@/lib/redis';
 import { isRateLimited } from '@/lib/rate-limiter';

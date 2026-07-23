@@ -107,9 +107,29 @@ export class RAGDedupCache {
 
       const similarity = cosineSimilarity(entry.queryEmbedding, newEmbedding);
 
-      console.log(`[RAGDedup] Similarity check: ${similarity.toFixed(3)} | threshold: ${SIMILARITY_THRESHOLD} | session=${sessionId}`);
+      // Substring match or keyword overlap check as fallback (especially useful for mock embeddings in dev)
+      const q1 = entry.query.toLowerCase().trim();
+      const q2 = newQuery.toLowerCase().trim();
+      
+      const isSubMatch = q1.includes(q2) || q2.includes(q1);
+      
+      const w1 = new Set(q1.split(/[^a-z0-9]+/).filter(w => w.length >= 3));
+      const w2 = new Set(q2.split(/[^a-z0-9]+/).filter(w => w.length >= 3));
+      let wordMatch = false;
+      if (w1.size > 0 && w2.size > 0) {
+        let intersection = 0;
+        for (const w of w1) {
+          if (w2.has(w)) intersection++;
+        }
+        const overlap = intersection / Math.min(w1.size, w2.size);
+        wordMatch = overlap >= 0.8;
+      }
 
-      if (similarity >= SIMILARITY_THRESHOLD) {
+      const isHit = similarity >= SIMILARITY_THRESHOLD || isSubMatch || wordMatch;
+
+      console.log(`[RAGDedup] Similarity check: cosine=${similarity.toFixed(3)}, subMatch=${isSubMatch}, wordMatch=${wordMatch} | threshold: ${SIMILARITY_THRESHOLD} | session=${sessionId}`);
+
+      if (isHit) {
         console.log(`[RAGDedup] Cache HIT — returning cached context (saved ~2,000 tokens)`);
         return (
           `[System: This knowledge base content was already retrieved at the start of this ` +
@@ -119,7 +139,7 @@ export class RAGDedupCache {
         );
       }
 
-      console.log(`[RAGDedup] Cache MISS — similarity too low, running fresh retrieval`);
+      console.log(`[RAGDedup] Cache MISS — running fresh retrieval`);
       return null;
     } catch (err) {
       console.warn('[RAGDedup] Cache check failed — allowing fresh retrieval:', (err as Error).message);

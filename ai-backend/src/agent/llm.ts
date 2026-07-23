@@ -290,19 +290,15 @@ async function* tryGrokStream(
             if (data.error) {
               console.error('[Grok Stream Error]:', data.error);
               
-              // tool_use_failed = model couldn't format tool call correctly — non-retryable
+              // tool_use_failed = model couldn't format tool call correctly
+              // Throw a non-retryable error — the orchestrator's final round
+              // (which uses no tools) will catch this and produce a plain-text response.
               if (data.error?.code === 'tool_use_failed') {
-                console.warn('[Grok] Model formatting error, emitting error response');
-                yield { 
-                  type: 'text' as const, 
-                  text: `[Internal] The LLM encountered an issue formatting its response. Please rephrase your question.` 
-                };
-                // Don't retry with this key for tool_use_failed — but also don't cooldown
-                // Just mark success and return (don't try other keys)
+                console.warn('[Grok] tool_use_failed — retrying without tools (orchestrator will handle)');
                 await markKeySuccess(masked);
-                return;
+                throw Object.assign(new Error('tool_use_failed'), { code: 'tool_use_failed', nonRetryable: false });
               }
-              
+
               // Other errors (5xx, timeout) = retryable
               await markKeyCooldown(masked, '5xx', String(data.error?.message ?? '').slice(0, 80));
               continue;

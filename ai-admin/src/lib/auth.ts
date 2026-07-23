@@ -106,3 +106,30 @@ export async function verifyJwt(token: string): Promise<AdminJwtPayload | null> 
     return null;
   }
 }
+
+/**
+ * Resolve admin identity from request.
+ * In development (NODE_ENV !== 'production'), always returns a dev admin
+ * so routes work without a real JWT cookie.
+ */
+export async function resolveAdmin(req: Request): Promise<AdminJwtPayload> {
+  if (process.env.NODE_ENV !== 'production') {
+    // Check if a real token is present first — if so, use it
+    const token = getAdminAccessTokenFromRequest(req);
+    if (token) {
+      const real = await verifyJwt(token);
+      if (real) return real;
+    }
+    // Fall back to dev identity
+    return {
+      userId: 'local-dev-admin',
+      email: 'dev@local.tashus',
+      role: 'super_admin',
+      displayName: 'Dev Admin',
+    };
+  }
+
+  const admin = await getAdminFromRequest(req);
+  if (!admin) throw new Error('Unauthorized');
+  return admin;
+}

@@ -155,7 +155,7 @@ class VoyageEmbeddingProvider implements EmbeddingProvider {
 
 // ── Mock provider (for local testing without API keys) ─────────────────────────
 
-class MockEmbeddingProvider implements EmbeddingProvider {
+export class MockEmbeddingProvider implements EmbeddingProvider {
   readonly dimension: number;
 
   constructor() {

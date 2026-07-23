@@ -94,20 +94,24 @@ All pickup/return dates you generate MUST be in ISO 8601 UTC format.
 function intentNeedsRag(text: string): boolean {
   const t = text.toLowerCase().trim();
 
-  // Greetings & short messages — no RAG needed
+  // Greetings & very short messages — no RAG needed
   if (t.split(/\s+/).length <= 3) return false;
 
-  // Vehicle / booking intent — tools will handle it
+  // Pure vehicle search / booking transactional intent — tools handle it, no RAG
   const transactionalPattern =
-    /\b(book|rent|reserve|hire|vehicle|car|suv|sedan|hatchback|ute|van|available|availability|pickup|return|date|from|voucher|discount|code|promo)\b/i;
+    /\b(book|rent|reserve|hire|available|availability|pickup|return|voucher|discount|code|promo)\b/i;
   if (transactionalPattern.test(t)) return false;
 
-  // Explicit policy / FAQ signals → needs RAG
+  // Vehicle type words alone don't need RAG — they trigger search_vehicles tool
+  const vehicleTypeOnly = /^(i need |show me |find me |get me )?(a |an |some )?(suv|sedan|hatchback|ute|van|convertible|coupe|wagon|car|vehicle|truck)s?(\s+in\s+\w+)?(\s+under\s+\$?\d+)?$/i;
+  if (vehicleTypeOnly.test(t)) return false;
+
+  // Explicit policy / FAQ / support signals → always needs RAG
   const policyPattern =
-    /\b(policy|rule|allow|permit|smoke|smoking|cancel|cancellation|insurance|excess|deposit|fee|age|limit|service|operate|location|city|state|region|hour|document|agreement|term|condition|requirement)\b/i;
+    /\b(policy|rule|allow|permit|smoke|smoking|cancel|cancellation|insurance|excess|deposit|fee|age|limit|service|operate|hour|document|agreement|term|condition|requirement|guideline|restriction|damage|accident|refund|penalty|late|extend|how does|how do|what is|what are|can i|is it|do you|does tashus)\b/i;
   if (policyPattern.test(t)) return true;
 
-  // Default: run RAG for anything else that isn't clearly transactional
+  // Default: run RAG for anything not clearly a vehicle search
   return true;
 }
 
@@ -197,6 +201,53 @@ export async function* processMessageStream(sessionId: string, userText: string,
     content: userText,
   } as any);
 
+  // 1a. Keyword-triggered handoff — check BEFORE calling LLM
+  if (dbSessionId) {
+    const handoffPattern =
+      /\b(human|agent|person|representative|rep|staff|real person|live agent|live support|live chat|live help|speak to|talk to|connect me|connect with|escalate|handoff|hand off|transfer me|human (support|assistance|help)|need (human|real|live) (help|support|agent|person)|i want (a |an )?(human|agent|person|support)|(can i|i want to) (speak|talk) (to|with) (a |an )?(human|person|agent)|human assist)\b/i;
+
+    if (handoffPattern.test(userText)) {
+      const { data: sessionState } = await (db.from('ai_chat_sessions') as any)
+        .select('is_ai_paused, visitor_id')
+        .eq('id', dbSessionId)
+        .single();
+
+      if (sessionState && !sessionState.is_ai_paused) {
+        console.log(`[Orchestrator] 🤝 Keyword handoff detected: "${userText.slice(0, 80)}"`);
+
+        await (db.from('ai_chat_sessions') as any)
+          .update({ is_ai_paused: true, status: 'handed_off', last_message_at: new Date().toISOString() })
+          .eq('id', dbSessionId);
+
+        const systemMsg = '🤝 Connecting you to a human agent — please hold on a moment.';
+        await (db.from('ai_chat_messages') as any)
+          .insert({ session_id: dbSessionId, role: 'system', content: systemMsg });
+
+        try {
+          const { redis: redisClient, buildSessionControlChannel } = await import('@/lib/redis');
+          await redisClient.publish(buildSessionControlChannel(dbSessionId), JSON.stringify({
+            type: 'control', paused: true,
+            message: { role: 'system', content: systemMsg },
+          }));
+          await redisClient.publish('admin:notifications', JSON.stringify({
+            type: 'handoff_requested',
+            session_id: dbSessionId,
+            visitor_id: sessionState.visitor_id,
+            reason: 'keyword_detected',
+            keyword_matched: userText.slice(0, 120),
+            timestamp: new Date().toISOString(),
+          }));
+        } catch (e) {
+          console.warn('[Orchestrator] Redis publish failed (non-critical):', e);
+        }
+
+        yield { type: 'paused' as const, message: { role: 'system', content: systemMsg } };
+        yield { type: 'done' as const, message: systemMsg, sources: [] };
+        return;
+      }
+    }
+  }
+
   // 2. Load config and memory
   const [config, conversation] = await Promise.all([
     loadActiveAgentConfig(),
@@ -284,15 +335,39 @@ export async function* processMessageStream(sessionId: string, userText: string,
 
     for await (const chunk of stream as any) {
       if (chunk.type === 'text') {
-        assistantTextThisRound += chunk.text;
-        finalMessageText += chunk.text;
-        yield { type: 'token' as const, text: chunk.text };
+        // Strip any raw XML tool-call tags the LLM may leak — but do NOT trim()
+        // each chunk. Trimming individual streamed chunks strips inter-word spaces
+        // and newlines, producing a broken single-line output.
+        const cleanText = chunk.text.replace(/<[a-z_]+>\s*\{[^}]*\}\s*<\/[a-z_]+>/g, '');
+        if (cleanText) {
+          assistantTextThisRound += chunk.text; // keep raw for tool_use block assembly
+          finalMessageText += cleanText;
+        }
+        // Don't stream tokens yet — if this round produces vehicle results,
+        // we'll replace the plain text with cards after the loop ends.
+        // Only yield tokens when NOT a vehicle search round.
       } else if (chunk.type === 'tool_call') {
         toolCallThisRound = chunk;
       } else if (chunk.type === 'usage') {
         if (chunk.input_tokens) totalInputTokens += chunk.input_tokens;
         if (chunk.output_tokens) totalOutputTokens = chunk.output_tokens;
       }
+    }
+
+    // If no tool call this round, decide whether to stream the text now
+    if (!toolCallThisRound) {
+      // Only suppress text when THIS round was a vehicle search (cards will be injected instead).
+      // Must NOT suppress get_vehicle_details, check_availability, or any other tool responses.
+      const lastToolCallInHistory = toolCalls[toolCalls.length - 1];
+      const isVehicleSearchRound =
+        lastToolCallInHistory?.name === 'search_vehicles' &&
+        lastToolCallInHistory?.result?.shown?.length > 0;
+
+      if (!isVehicleSearchRound) {
+        // Stream the text response immediately for all non-vehicle-search rounds
+        yield { type: 'token' as const, text: assistantTextThisRound };
+      }
+      // If it IS a vehicle search round, the card injection block below handles streaming
     }
 
     if (toolCallThisRound) {
@@ -412,6 +487,43 @@ export async function* processMessageStream(sessionId: string, userText: string,
 
       toolCalls.push({ name: toolName, params: toolArgs, result, logId });
 
+      // If escalate_to_human was called, activate circuit breaker and stop
+      if (toolName === 'escalate_to_human' && result?.escalate && dbSessionId) {
+        console.log(`[Orchestrator] 🤝 escalate_to_human tool triggered — activating circuit breaker`);
+
+        await (db.from('ai_chat_sessions') as any)
+          .update({ is_ai_paused: true, status: 'handed_off', last_message_at: new Date().toISOString() })
+          .eq('id', dbSessionId);
+
+        const systemMsg = '🤝 Connecting you to a human agent — please hold on a moment.';
+        await (db.from('ai_chat_messages') as any)
+          .insert({ session_id: dbSessionId, role: 'system', content: systemMsg });
+
+        try {
+          const { redis: redisClient, buildSessionControlChannel } = await import('@/lib/redis');
+          const { data: sessionState } = await (db.from('ai_chat_sessions') as any)
+            .select('visitor_id').eq('id', dbSessionId).single();
+          await redisClient.publish(buildSessionControlChannel(dbSessionId), JSON.stringify({
+            type: 'control', paused: true,
+            message: { role: 'system', content: systemMsg },
+          }));
+          await redisClient.publish('admin:notifications', JSON.stringify({
+            type: 'handoff_requested',
+            session_id: dbSessionId,
+            visitor_id: sessionState?.visitor_id,
+            reason: 'user_requested',
+            timestamp: new Date().toISOString(),
+          }));
+        } catch (e) {
+          console.warn('[Orchestrator] Redis publish failed (non-critical):', e);
+        }
+
+        finalMessageText = systemMsg;
+        yield { type: 'paused' as const, message: { role: 'system', content: systemMsg } };
+        yield { type: 'done' as const, message: systemMsg, sources: [] };
+        return;
+      }
+
       // Yield tool_result
       yield { type: 'tool_result' as const, tool: toolName, result };
 
@@ -445,12 +557,96 @@ export async function* processMessageStream(sessionId: string, userText: string,
     }
   }
 
+  // ── Inject vehicle card tags when search_vehicles was called ──────────────
+  // Replace the LLM's plain text entirely with vehicle cards only.
+  const vehicleToolCall = toolCalls.find((t) => t.name === 'search_vehicles' && t.result?.shown?.length > 0);
+  if (vehicleToolCall) {
+    const shown: any[] = vehicleToolCall.result.shown ?? [];
+    const totalMatching: number = vehicleToolCall.result.total_matching ?? shown.length;
+    const inputArgs = vehicleToolCall.params ?? {};
+
+    const vehicleTags = shown.slice(0, 10).map((v: any) => {
+      const tag = {
+        listingId: v.listingId,
+        displayName: v.displayName,
+        carType: v.carType,
+        seats: v.seats ?? 5,
+        transmission: v.transmission ?? 'Automatic',
+        dailyRate: v.dailyRate ?? 0,
+        location: v.location,
+        coverPhotoUrl: v.coverPhotoUrl ?? '',
+        hostRating: v.hostRating,
+      };
+      return `[VEHICLE: ${JSON.stringify(tag)}]`;
+    });
+
+    if (totalMatching > 10) {
+      const remaining = totalMatching - 10;
+      const qp = new URLSearchParams();
+      if (inputArgs.city)     qp.set('city', inputArgs.city);
+      if (inputArgs.from)     qp.set('from', inputArgs.from);
+      if (inputArgs.to)       qp.set('to', inputArgs.to);
+      if (inputArgs.cType)    qp.set('cType', inputArgs.cType);
+      if (inputArgs.tType)    qp.set('tType', inputArgs.tType);
+      if (inputArgs.maxPrice) qp.set('maxPrice', String(inputArgs.maxPrice));
+      const searchUrl = `/search?${qp.toString()}`;
+      vehicleTags.push(`[VEHICLE: ${JSON.stringify({ type: 'view_more', remaining, searchUrl })}]`);
+    }
+
+    if (vehicleTags.length > 0) {
+      // Build a natural, human-like context line
+      const typeLabel  = inputArgs.cType  ? inputArgs.cType  : '';
+      const cityLabel  = inputArgs.city   ? inputArgs.city   : 'Sydney';
+
+      // Date context — work out "tomorrow", a specific date, or "starting from X"
+      let dateLabel = 'tomorrow'; // default when user didn't specify
+      if (inputArgs.from) {
+        try {
+          const fromDate = new Date(inputArgs.from);
+          const today    = new Date();
+          today.setHours(0, 0, 0, 0);
+          const tomorrow = new Date(today);
+          tomorrow.setDate(tomorrow.getDate() + 1);
+          const diffDays = Math.round((fromDate.getTime() - today.getTime()) / 86400000);
+
+          if (diffDays === 0)       dateLabel = 'today';
+          else if (diffDays === 1)  dateLabel = 'tomorrow';
+          else if (diffDays <= 6)   dateLabel = fromDate.toLocaleDateString('en-AU', { weekday: 'long' }); // "Saturday"
+          else                      dateLabel = fromDate.toLocaleDateString('en-AU', { day: 'numeric', month: 'short' }); // "28 Jul"
+        } catch { dateLabel = 'tomorrow'; }
+      }
+
+      // Optional extras — only what user actually asked for
+      const extras: string[] = [];
+      if (inputArgs.maxPrice)  extras.push(`under $${inputArgs.maxPrice}/day`);
+      if (inputArgs.minSeats)  extras.push(`${inputArgs.minSeats} seats`);
+      if (inputArgs.tType)     extras.push(inputArgs.tType.toLowerCase());
+
+      // Natural sentence: "Here are some SUVs in Sydney available tomorrow"
+      const typePhrase = typeLabel
+        ? (typeLabel.endsWith('s') ? typeLabel : typeLabel + 's')
+        : 'vehicles';
+      let contextLine = `Here are some ${typePhrase} in ${cityLabel} available ${dateLabel}`;
+      if (extras.length > 0) contextLine += ` — ${extras.join(', ')}`;
+      contextLine += ':';
+
+      const followUp = '\n\nWould you like to know more about any of these?';
+      const finalOutput = contextLine + '\n\n' + vehicleTags.join(' ') + followUp;
+      finalMessageText = finalOutput;
+      yield { type: 'token' as const, text: finalOutput };
+      console.log(`[Orchestrator] 🚗 Vehicle cards: ${shown.length} shown — "${contextLine}"`);
+    }
+  }
+
   // Persist assistant final message
-  const finalMessage = finalMessageText || (
+  let finalMessage = finalMessageText || (
     retrieval.context && retrieval.context !== 'No relevant information found in the knowledge base.'
       ? `According to our knowledge:\n${retrieval.context}\n\nIf you need more details, I can check live availability or vouchers for you.`
       : "I don't have that information in our knowledge base. I can check live availability or look up vouchers if you'd like."
   );
+
+  // Strip any raw XML tool-call tags (e.g. <search_knowledge_base>{"query":"..."}</search_knowledge_base>)
+  finalMessage = finalMessage.replace(/<[a-z_]+>\s*\{[\s\S]*?\}\s*<\/[a-z_]+>/g, '').trim();
 
   // v3.1.0 Phase C.4: Hallucination check on the final assembled response
   const hallucinationCheck = detectHallucinations(

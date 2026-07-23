@@ -29,9 +29,36 @@ export default function ChatWindow({
 }: ChatWindowProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
+  const prevLengthRef = useRef(messages.length);
+
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const shouldSmooth = messages.length !== prevLengthRef.current;
+      prevLengthRef.current = messages.length;
+
+      const container = scrollRef.current;
+      
+      // Scroll immediately
+      requestAnimationFrame(() => {
+        if (container) {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: shouldSmooth ? 'smooth' : 'auto'
+          });
+        }
+      });
+
+      // Delayed fallback scroll (catches dynamic DOM expansion or rendering delays)
+      const timer = setTimeout(() => {
+        if (container) {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: shouldSmooth ? 'smooth' : 'auto'
+          });
+        }
+      }, 100);
+
+      return () => clearTimeout(timer);
     }
   }, [messages, streaming]);
 
@@ -129,6 +156,11 @@ export default function ChatWindow({
       {/* ── Messages ────────────────────────────────────────────────── */}
       <div
         ref={scrollRef}
+        onLoadCapture={() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        }}
         style={{
           flex: 1,
           overflowY: 'auto',

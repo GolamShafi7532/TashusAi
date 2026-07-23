@@ -1,5 +1,5 @@
 'use strict';
-import React, { useState } from 'react';
+import React from 'react';
 import type { ChatMessage } from '../lib/types';
 import StreamingCursor from './StreamingCursor';
 import VehicleResultCard from './VehicleResultCard';
@@ -10,7 +10,6 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
   const isUser = role === 'user';
   const isAdmin = role === 'admin';
   const isSystem = role === 'system' && !message.toolName;
-  const [hovered, setHovered] = useState(false);
 
   /* System / tool status pills */
   if (role === 'system' && !message.toolName) {
@@ -35,7 +34,7 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
 
   /* ── CTA Button renderer ────────────────────────────────────────── */
   const CtaButton = ({ label, url }: { label: string; url: string }) => {
-    const [btnHovered, setBtnHovered] = useState(false);
+    const [btnHovered, setBtnHovered] = React.useState(false);
     return (
       <button
         onClick={() => { window.parent.location.href = url; }}
@@ -188,8 +187,6 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
         alignItems: isUser ? 'flex-end' : 'flex-start',
         width: '100%',
       }}
-      onMouseEnter={() => setHovered(true)}
-      onMouseLeave={() => setHovered(false)}
     >
       {/* Role label */}
       <div style={{
@@ -253,16 +250,15 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
         )}
       </div>
 
-      {/* Timestamp on hover */}
-      {hovered && message.createdAt && (
+      {/* Timestamp — always visible */}
+      {message.createdAt && !streaming && (
         <div style={{
           fontSize: '9px',
           color: 'rgba(0,0,0,0.3)',
           fontWeight: 500,
-          marginTop: '6px',
+          marginTop: '4px',
           paddingLeft: isUser ? 0 : '4px',
           paddingRight: isUser ? '4px' : 0,
-          animation: 'w-fade-in 0.15s ease-out',
         }}>
           {message.createdAt.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' })}
         </div>

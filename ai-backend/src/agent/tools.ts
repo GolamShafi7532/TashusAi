@@ -25,12 +25,13 @@ export const AGENT_TOOLS: ToolSchema[] = [
     name: 'search_vehicles',
     description: `Search live Tashus vehicle inventory by location, date range, and optional filters.
 
-CRITICAL INSTRUCTIONS:
-- If the user has NOT specified a city or location, ASK for it — do NOT guess or fill with any placeholder
-- If the user has NOT specified dates, ASK for them — do NOT assume "soon", "tomorrow", or any other date
-- All filtering (price, seats, type) happens server-side — you just pass the raw criteria
-- minSeats is a FLOOR LIMIT (e.g. minSeats=5 returns 5, 7, and 8-seater vehicles — not just exactly 5)
-- maxPrice is a CEILING (e.g. maxPrice=120 returns vehicles at $120/day or cheaper)`,
+RULES:
+- DEFAULT city is always "Sydney" — NEVER ask the user for location unless they explicitly mention a different city
+- If the user has NOT specified dates, use tomorrow's date as the default pickup (from = tomorrow 9am local time, to = day after tomorrow 9am local time)
+- All filtering (price, seats, type) happens server-side — pass the raw criteria directly
+- minSeats is a FLOOR LIMIT (e.g. minSeats=5 returns 5, 7, and 8-seater vehicles)
+- maxPrice is a CEILING (e.g. maxPrice=120 returns vehicles at $120/day or cheaper)
+- Always call this tool when the user asks for any vehicle, car, SUV, etc — do NOT ask clarifying questions first`,
 
     input_schema: {
       type: 'object',
@@ -38,7 +39,7 @@ CRITICAL INSTRUCTIONS:
         // Location — at least city OR lat+long is expected
         city: {
           type: 'string',
-          description: 'City name for pickup location (e.g. "Sydney", "Melbourne"). Required unless lat/long provided.',
+          description: 'City name for pickup location (e.g. "Sydney", "Melbourne"). Defaults to "Sydney" if not specified by user.',
         },
         country: {
           type: 'string',
@@ -166,6 +167,27 @@ CRITICAL INSTRUCTIONS:
       additionalProperties: false,
     },
   },
+
+  {
+    name: 'escalate_to_human',
+    description: `Escalate the conversation to a human support agent. Call this tool IMMEDIATELY whenever the user:
+- asks for a human, agent, person, representative, or staff member
+- says "human support", "human assistance", "speak to someone", "talk to a human", "connect me to an agent"
+- expresses frustration or says they want to stop talking to the AI
+- uses any variation of wanting real/live/human help
+Do NOT try to answer the question yourself — call this tool right away.`,
+    input_schema: {
+      type: 'object',
+      properties: {
+        reason: {
+          type: 'string',
+          description: 'Brief reason for escalation (e.g. "User requested human support").',
+        },
+      },
+      required: [],
+      additionalProperties: false,
+    },
+  },
 ];
 
 export async function executeTool(name: string, args: Record<string, any>, opts?: { sessionId?: string }) {
@@ -184,6 +206,9 @@ export async function executeTool(name: string, args: Record<string, any>, opts?
         throw new Error('search_knowledge_base requires query');
       }
       return searchKnowledgeBaseTool(String(args.query));
+    case 'escalate_to_human':
+      // Handled directly in the orchestrator via circuit breaker — return signal
+      return { escalate: true, reason: args?.reason ?? 'User requested human support' };
     default:
       throw new Error(`Unknown tool: ${name}`);
   }
