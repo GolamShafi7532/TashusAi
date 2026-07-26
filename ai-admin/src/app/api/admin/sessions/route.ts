@@ -18,7 +18,7 @@ async function resolveAdmin(req: Request) {
 
 /**
  * GET /api/admin/sessions
- * List and filter chat sessions.
+ * List and filter chat sessions with stats.
  */
 export async function GET(req: Request) {
   try {
@@ -31,11 +31,18 @@ export async function GET(req: Request) {
     const status = url.searchParams.get('status');
     const channel = url.searchParams.get('channel');
     const assignedAdminId = url.searchParams.get('assignedAdminId');
+    const handoff = url.searchParams.get('handoff') === 'true';
+    const limit = parseInt(url.searchParams.get('limit') || '50');
 
     let query = (db.from('ai_chat_sessions') as any)
       .select('*')
-      .order('last_message_at', { ascending: false });
+      .order('is_ai_paused', { ascending: false }) // Handoffs float to top
+      .order('last_message_at', { ascending: false })
+      .limit(limit);
 
+    if (handoff) {
+      query = query.eq('is_ai_paused', true);
+    }
     if (status) query = query.eq('status', status);
     if (channel) query = query.eq('channel', channel);
     if (assignedAdminId) {
@@ -51,7 +58,65 @@ export async function GET(req: Request) {
       return NextResponse.json({ error: 'Failed to retrieve sessions' }, { status: 500 });
     }
 
-    return NextResponse.json({ sessions: sessions ?? [] });
+    // Calculate stats
+    const allSessionsQuery = await (db.from('ai_chat_sessions') as any)
+      .select('status, is_ai_paused, closed_at');
+    
+    const allSessions = allSessionsQuery.data || [];
+    const stats = {
+      active: allSessions.filter((s: any) => s.status === 'active' && !s.is_ai_paused).length,
+      handed_off: allSessions.filter((s: any) => s.is_ai_paused).length,
+      closed_today: allSessions.filter((s: any) => {
+        if (!s.closed_at) return false;
+        const closedDate = new Date(s.closed_at);
+        const today = new Date();
+        return closedDate.toDateString() === today.toDateString();
+      }).length,
+    };
+
+    // Enrich sessions with last message preview and admin names
+    const enrichedSessions = await Promise.all((sessions || []).map(async (session: any) => {
+      // Get last message
+      const { data: lastMsg } = await (db.from('ai_chat_messages') as any)
+        .select('content')
+        .eq('session_id', session.id)
+        .order('created_at', { ascending: false })
+        .limit(1)
+        .single();
+      
+      // Get message count
+      const { count } = await (db.from('ai_chat_messages') as any)
+        .select('id', { count: 'exact', head: true })
+        .eq('session_id', session.id);
+
+      // Get admin name if assigned
+      let adminName = null;
+      if (session.assigned_admin_id) {
+        const { data: adminUser } = await (db.from('ai_admin_users') as any)
+          .select('display_name')
+          .eq('id', session.assigned_admin_id)
+          .single();
+        adminName = adminUser?.display_name;
+      }
+
+      return {
+        ...session,
+        last_message: lastMsg?.content || '',
+        message_count: count || 0,
+        admin_name: adminName,
+      };
+    }));
+
+    return NextResponse.json({ 
+      sessions: enrichedSessions,
+      stats,
+      pagination: { 
+        total: enrichedSessions.length, 
+        page: 1, 
+        limit, 
+        total_pages: 1 
+      }
+    });
   } catch (err: any) {
     console.error('[SessionsListRoute] Error:', err);
     return NextResponse.json({ error: err.message ?? 'Internal Server Error' }, { status: 500 });

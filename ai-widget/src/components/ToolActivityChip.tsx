@@ -23,12 +23,12 @@ export default function ToolActivityChip({ toolName }: { toolName: string }) {
 
   return (
     <div
-      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-[#20B9BE]/10 border border-[#20B9BE]/20 text-[#20B9BE] my-1"
+      className="inline-flex items-center gap-2 px-3 py-1.5 rounded-full text-xs font-semibold bg-[#80137f]/10 border border-[#80137f]/20 text-[#80137f] my-1"
       style={{
         animation: 'w-pulse 1.5s infinite ease-in-out'
       }}
     >
-      <span className="w-1.5 h-1.5 rounded-full bg-[#20B9BE] animate-ping" />
+      <span className="w-1.5 h-1.5 rounded-full bg-[#80137f] animate-ping" />
       <span>{getFriendlyMessage(toolName)}</span>
     </div>
   );

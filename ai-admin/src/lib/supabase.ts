@@ -122,20 +122,49 @@ export interface AiToolCallLog {
   response_summary: Record<string, any> | null;
   cache_hit: boolean;
   duration_ms: number | null;
+  // v3.1.0: token tracking columns
+  tokens_in: number | null;
+  tokens_out: number | null;
+  token_cost_usd: number | null;
+  provider: string | null;   // e.g. 'groq', 'openrouter', 'anthropic'
   created_at: string;
+}
+
+export interface AiSessionTag {
+  id: string;
+  name: string;
+  color: string | null;
+  is_active: boolean;
+  usage_count: number;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AiCannedResponse {
+  id: string;
+  title: string;
+  content: string;
+  category: string | null;
+  shortcut: string | null;
+  is_active: boolean;
+  created_by: string | null;
+  created_at: string;
+  updated_at: string;
 }
 
 export interface Database {
   public: {
     Tables: {
-      ai_admin_users:    { Row: AiAdminUser };
-      ai_admin_sessions: { Row: AiAdminSession };
-      ai_chat_sessions:  { Row: AiChatSession };
-      ai_chat_messages:  { Row: AiChatMessage };
-      ai_documents:      { Row: AiDocument };
-      ai_knowledge_base: { Row: AiKnowledgeBase };
-      ai_agent_configs:  { Row: AiAgentConfig };
-      ai_tool_call_logs: { Row: AiToolCallLog };
+      ai_admin_users:      { Row: AiAdminUser };
+      ai_admin_sessions:   { Row: AiAdminSession };
+      ai_chat_sessions:    { Row: AiChatSession };
+      ai_chat_messages:    { Row: AiChatMessage };
+      ai_documents:        { Row: AiDocument };
+      ai_knowledge_base:   { Row: AiKnowledgeBase };
+      ai_agent_configs:    { Row: AiAgentConfig };
+      ai_tool_call_logs:   { Row: AiToolCallLog };
+      ai_canned_responses: { Row: AiCannedResponse };
+      ai_session_tags:     { Row: AiSessionTag };
     };
   };
 }
@@ -151,6 +180,8 @@ interface LocalStoreData {
   ai_knowledge_base: AiKnowledgeBase[];
   ai_agent_configs: AiAgentConfig[];
   ai_tool_call_logs: AiToolCallLog[];
+  ai_canned_responses: AiCannedResponse[];
+  ai_session_tags: AiSessionTag[];
 }
 
 const localStorePath = path.join(process.cwd(), '.local-admin-data', 'auth-store.json');
@@ -165,6 +196,8 @@ function createDefaultStore(): LocalStoreData {
     ai_knowledge_base: [],
     ai_agent_configs: [],
     ai_tool_call_logs: [],
+    ai_canned_responses: [],
+    ai_session_tags: [],
   };
 }
 
@@ -176,14 +209,16 @@ async function readLocalStore(): Promise<LocalStoreData> {
     // Merge parsed data with defaults to handle missing keys gracefully
     const defaults = createDefaultStore();
     return {
-      ai_admin_users:    parsed.ai_admin_users    ?? defaults.ai_admin_users,
-      ai_admin_sessions: parsed.ai_admin_sessions ?? defaults.ai_admin_sessions,
-      ai_chat_sessions:  parsed.ai_chat_sessions  ?? defaults.ai_chat_sessions,
-      ai_chat_messages:  parsed.ai_chat_messages  ?? defaults.ai_chat_messages,
-      ai_documents:      parsed.ai_documents      ?? defaults.ai_documents,
-      ai_knowledge_base: parsed.ai_knowledge_base ?? defaults.ai_knowledge_base,
-      ai_agent_configs:  parsed.ai_agent_configs  ?? defaults.ai_agent_configs,
-      ai_tool_call_logs: parsed.ai_tool_call_logs ?? defaults.ai_tool_call_logs,
+      ai_admin_users:      parsed.ai_admin_users    ?? defaults.ai_admin_users,
+      ai_admin_sessions:   parsed.ai_admin_sessions ?? defaults.ai_admin_sessions,
+      ai_chat_sessions:    parsed.ai_chat_sessions  ?? defaults.ai_chat_sessions,
+      ai_chat_messages:    parsed.ai_chat_messages  ?? defaults.ai_chat_messages,
+      ai_documents:        parsed.ai_documents      ?? defaults.ai_documents,
+      ai_knowledge_base:   parsed.ai_knowledge_base ?? defaults.ai_knowledge_base,
+      ai_agent_configs:    parsed.ai_agent_configs  ?? defaults.ai_agent_configs,
+      ai_tool_call_logs:   parsed.ai_tool_call_logs ?? defaults.ai_tool_call_logs,
+      ai_canned_responses: parsed.ai_canned_responses ?? defaults.ai_canned_responses,
+      ai_session_tags:     parsed.ai_session_tags     ?? defaults.ai_session_tags,
     };
   } catch {
     return createDefaultStore();

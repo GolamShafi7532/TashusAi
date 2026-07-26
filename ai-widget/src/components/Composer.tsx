@@ -9,23 +9,21 @@ interface ComposerProps {
 export default function Composer({ onSend, disabled }: ComposerProps) {
   const [text, setText] = useState('');
   const textareaRef = useRef<HTMLTextAreaElement | null>(null);
+  const [focused, setFocused] = useState(false);
 
-  // Auto-resize height based on contents (up to 4 lines / ~96px)
   useEffect(() => {
     const el = textareaRef.current;
     if (!el) return;
-
     el.style.height = 'auto';
-    const newHeight = Math.min(el.scrollHeight, 96);
-    el.style.height = `${newHeight}px`;
+    el.style.height = `${Math.min(el.scrollHeight, 88)}px`;
   }, [text]);
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!text.trim() || disabled) return;
-
     onSend(text.trim());
     setText('');
+    if (textareaRef.current) textareaRef.current.style.height = '40px';
   };
 
   const handleKeyDown = (e: React.KeyboardEvent<HTMLTextAreaElement>) => {
@@ -35,28 +33,94 @@ export default function Composer({ onSend, disabled }: ComposerProps) {
     }
   };
 
+  const canSend = !disabled && text.trim().length > 0;
+
   return (
-    <form onSubmit={handleSubmit} className="p-3 border-t border-[#1E293B] bg-[#090D11]/30 flex items-end gap-2.5">
-      <textarea
-        ref={textareaRef}
-        rows={1}
-        value={text}
-        onChange={(e) => setText(e.target.value)}
-        onKeyDown={handleKeyDown}
-        className="flex-1 bg-[#090D11] border border-[#1E293B] hover:border-[#20B9BE] focus:border-[#20B9BE] rounded-xl px-4 py-3 text-xs text-white placeholder-[#94A3B8] focus:outline-none transition-all resize-none max-h-24 scrollbar-none font-medium leading-relaxed"
-        placeholder="Ask Tashus AI support..."
-        style={{
-          height: '42px',
-        }}
-      />
+    <form
+      onSubmit={handleSubmit}
+      style={{
+        padding: '12px 16px 14px',
+        borderTop: '1px solid rgba(128,19,127,0.12)',
+        background: 'rgba(255,255,255,0.5)',
+        display: 'flex',
+        alignItems: 'flex-end',
+        gap: '10px',
+        flexShrink: 0,
+      }}
+    >
+      {/* Input wrapper */}
+      <div style={{
+        flex: 1,
+        background: 'rgba(255,255,255,0.8)',
+        border: focused
+          ? '1px solid rgba(128,19,127,0.5)'
+          : '1px solid rgba(128,19,127,0.2)',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        transition: 'border-color 0.15s',
+        boxShadow: focused ? '0 0 0 3px rgba(128,19,127,0.1)' : 'none',
+      }}>
+        <textarea
+          ref={textareaRef}
+          rows={1}
+          value={text}
+          onChange={(e) => setText(e.target.value)}
+          onKeyDown={handleKeyDown}
+          onFocus={() => setFocused(true)}
+          onBlur={() => setFocused(false)}
+          disabled={disabled}
+          placeholder="Ask Tashus AI support..."
+          style={{
+            width: '100%',
+            background: 'transparent',
+            border: 'none',
+            outline: 'none',
+            resize: 'none',
+            color: '#1a1a1a',
+            fontSize: '13px',
+            fontWeight: 400,
+            lineHeight: 1.5,
+            padding: '10px 12px',
+            height: '40px',
+            maxHeight: '88px',
+            fontFamily: 'inherit',
+            boxSizing: 'border-box',
+          }}
+        />
+      </div>
+
+      {/* Send button */}
       <button
         type="submit"
-        disabled={disabled || !text.trim()}
-        className="w-10 h-10 bg-[#20B9BE] hover:bg-[#17878b] disabled:bg-[#1E293B] disabled:text-[#94A3B8] text-white rounded-xl flex items-center justify-center shrink-0 transition-all shadow-md shadow-[#20B9BE]/10"
-        title="Send Message"
+        disabled={!canSend}
+        style={{
+          width: '40px',
+          height: '40px',
+          borderRadius: '12px',
+          background: canSend
+            ? 'linear-gradient(135deg, #80137f 0%, #9d1b9c 100%)'
+            : 'rgba(128,19,127,0.15)',
+          border: canSend
+            ? '1px solid rgba(128,19,127,0.2)'
+            : '1px solid rgba(128,19,127,0.12)',
+          color: canSend ? '#fff' : 'rgba(128,19,127,0.4)',
+          cursor: canSend ? 'pointer' : 'not-allowed',
+          display: 'flex',
+          alignItems: 'center',
+          justifyContent: 'center',
+          flexShrink: 0,
+          transition: 'all 0.15s',
+          boxShadow: canSend ? '0 4px 12px rgba(128,19,127,0.25)' : 'none',
+        }}
+        onMouseEnter={e => { if (canSend) e.currentTarget.style.transform = 'scale(1.06)'; }}
+        onMouseLeave={e => { e.currentTarget.style.transform = 'scale(1)'; }}
       >
-        <svg className="w-4 h-4 transform rotate-90" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
+        <svg
+          width="16" height="16" fill="none" viewBox="0 0 24 24"
+          stroke="currentColor" strokeWidth={2.5}
+          style={{ transform: 'rotate(90deg)' }}
+        >
+          <path strokeLinecap="round" strokeLinejoin="round" d="M12 19l9 2-9-18-9 18 9-2zm0 0v-8" />
         </svg>
       </button>
     </form>

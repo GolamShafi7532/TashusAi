@@ -15,11 +15,17 @@ function initWidget() {
     document.body.appendChild(container);
   }
 
+  if ((container as any).__tashus_initialized) {
+    return;
+  }
+  (container as any).__tashus_initialized = true;
+
   // Read data-tashus-jwt-cookie attribute if configured by host page
   const jwtCookieName = container.getAttribute('data-tashus-jwt-cookie') || undefined;
 
-  // 1. Create Shadow Root to isolate styles
-  const shadowRoot = container.attachShadow({ mode: 'open' });
+  // 1. Create or reuse Shadow Root to isolate styles
+  const shadowRoot = container.shadowRoot || container.attachShadow({ mode: 'open' });
+  shadowRoot.innerHTML = ''; // clear any previous mounts
 
   // 2. Append scoped style tag with Tailwind + custom widget CSS
   const styleTag = document.createElement('style');
@@ -38,6 +44,7 @@ function initWidget() {
       <App jwtCookieName={jwtCookieName} />
     </React.StrictMode>
   );
+  (window as any).tashusAiWidget = root;
 }
 
 // Bootstrap widget when DOM is ready

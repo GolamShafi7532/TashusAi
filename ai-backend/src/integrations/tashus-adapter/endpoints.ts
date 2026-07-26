@@ -5,9 +5,18 @@
  * Every function here maps 1:1 to an entry in ALLOWED_ENDPOINTS in client.ts.
  * There is no "call any URL" escape hatch.
  *
+ * v3.1.0 Changes (Phase B.1.3 + Phase C):
+ *  - searchVehicles: fetches pageSize=30 (generous), then applies code-level
+ *    filter + sort + mask via VehicleFilterEngine. Returns FilteredSearchResult
+ *    (~750 tokens) instead of raw TSearchedCar[] (~12,500 tokens). 94% reduction.
+ *  - getVehicleDetails: applies maskVehicleDetails() before returning.
+ *    Returns MaskedVehicleDetails (~500 tokens) instead of raw TCarDataState
+ *    (~5,000 tokens). 90% reduction.
+ *
  * Source of truth: AI Chatbot blueprint.md §3.2 & Tashus blueprint.md §4
  */
 import { tashusGet } from './client';
+import { vehicleFilterEngine, FilterCriteria, FilteredSearchResult, MaskedVehicleDetails } from './filter-engine';
 import type {
   TSearchedCar,
   TCarDataState,
@@ -26,23 +35,25 @@ export interface SearchVehiclesParams {
   region?: string;
   lat?: number;
   long?: number;
-  from: string;         // ISO datetime UTC
-  to: string;           // ISO datetime UTC
+  from: string;             // ISO datetime UTC
+  to: string;               // ISO datetime UTC
   currentDateTime?: string;
+  // Filter params — extracted here, NOT forwarded to Tashus API (it doesn't support them)
   cType?: string;
   fType?: string;
   tType?: string;
+  minSeats?: number;        // v3.1.0: renamed from seats, floor-limit semantics
+  seats?: number;           // kept for backwards compat — maps to minSeats
+  maxPrice?: number;
   year?: number;
   color?: string;
-  seats?: number;
-  maxPrice?: number;
 }
 
 export async function searchVehicles(
   params: SearchVehiclesParams,
   sessionId?: string | null
-): Promise<TSearchedCar[]> {
-  // Auto-inject currentDateTime if not provided by the LLM tool call
+): Promise<FilteredSearchResult> {
+  // Auto-inject currentDateTime if not provided
   const enrichedParams = {
     ...params,
     currentDateTime: params.currentDateTime ?? new Date().toISOString(),
@@ -50,33 +61,59 @@ export async function searchVehicles(
 
   console.log(`[TashusAdapter] searchVehicles called with params:`, JSON.stringify(enrichedParams));
 
-  // Extract non-endpoint filters so they aren't sent directly to query parameters
-  const { seats, maxPrice, ...apiParams } = enrichedParams;
+  // Extract filter criteria (NOT sent to Tashus API)
+  const filterCriteria: FilterCriteria = {
+    maxPrice:     enrichedParams.maxPrice,
+    minSeats:     enrichedParams.minSeats ?? enrichedParams.seats,
+    vehicleType:  enrichedParams.cType,
+    transmission: enrichedParams.tType,
+    fuelType:     enrichedParams.fType,
+  };
 
-  const result = await tashusGet<{ results: TSearchedCar[] }>('/search/find-cars', {
-    sessionId,
-    toolName: 'search_vehicles',
-    params: apiParams as unknown as Record<string, string | number>,
-  });
-  // Tashus wraps results in { results: [...] }
-  let vehicles = result.results ?? (result as unknown as TSearchedCar[]);
-  console.log(`[TashusAdapter] Raw searchVehicles returned ${Array.isArray(vehicles) ? vehicles.length : 0} vehicles`);
+  // Strip filter-only fields before building API query params
+  const {
+    minSeats: _minSeats, seats: _seats, maxPrice: _maxPrice,
+    cType: _cType, tType: _tType, fType: _fType,
+    year: _year, color: _color,
+    ...apiOnlyParams
+  } = enrichedParams;
 
-  // Apply post-filtering for seats (if specified)
-  if (seats) {
-    const minSeats = Number(seats);
-    vehicles = vehicles.filter(v => v.car?.seats && v.car.seats >= minSeats);
-    console.log(`[TashusAdapter] Filtered by seats >= ${minSeats}: ${vehicles.length} remaining`);
-  }
+  // Build the API params — generous fetch of 30 so code-level filtering has
+  // enough candidates. Tashus API does support cType/tType/fType so still pass those.
+  const apiParams: Record<string, string | number> = {
+    ...apiOnlyParams as any,
+    ...(enrichedParams.cType  && { cType:  enrichedParams.cType }),
+    ...(enrichedParams.tType  && { tType:  enrichedParams.tType }),
+    ...(enrichedParams.fType  && { fType:  enrichedParams.fType }),
+    page:     1,
+    pageSize: 30,    // generous fetch — more than enough to filter down to 5
+  };
 
-  // Apply post-filtering for price (if specified)
-  if (maxPrice) {
-    const limit = Number(maxPrice);
-    vehicles = vehicles.filter(v => v.rates?.dailyRates?.amount && v.rates.dailyRates.amount <= limit);
-    console.log(`[TashusAdapter] Filtered by maxPrice <= ${limit}: ${vehicles.length} remaining`);
-  }
+  const response = await tashusGet<{ results: TSearchedCar[] } | TSearchedCar[]>(
+    '/search/find-cars',
+    {
+      sessionId,
+      toolName: 'search_vehicles',
+      params: apiParams,
+    }
+  );
 
-  return vehicles;
+  // Normalise — Tashus wraps in { results: [...] }
+  const rawVehicles: TSearchedCar[] = Array.isArray(response)
+    ? response
+    : (response as any).results ?? [];
+
+  console.log(`[TashusAdapter] Raw searchVehicles returned ${rawVehicles.length} vehicles`);
+
+  // Apply code-level filter + sort + mask (the 94% token reduction)
+  const result = vehicleFilterEngine.processSearchResults(rawVehicles, filterCriteria);
+
+  console.log(
+    `[TashusAdapter] After filtering: ${result.total_matching}/${result.total_raw} match, ` +
+    `showing top ${result.shown.length} masked vehicles`
+  );
+
+  return result;
 }
 
 
@@ -86,11 +123,14 @@ export async function searchVehicles(
 export async function getVehicleDetails(
   listingId: number,
   sessionId?: string | null
-): Promise<TCarDataState> {
-  return tashusGet<TCarDataState>(`/search/find-cars/${listingId}`, {
+): Promise<MaskedVehicleDetails> {
+  const raw = await tashusGet<TCarDataState>(`/search/find-cars/${listingId}`, {
     sessionId,
     toolName: 'get_vehicle_details',
   });
+
+  // Apply detail masking (90% token reduction)
+  return vehicleFilterEngine.maskVehicleDetails(raw);
 }
 
 // ── Get block dates for a vehicle (live availability windows) ─────────────────
@@ -136,7 +176,6 @@ export async function getVoucherBySlug(
 
 // ── Calculate delivery price by driving distance ──────────────────────────────
 // Maps to: GET /search/vehicle-delivery-price/:drivingDistanceInKm
-// This is a pure calculation endpoint — not a mutation.
 
 export async function getDeliveryPrice(
   drivingDistanceInKm: number,

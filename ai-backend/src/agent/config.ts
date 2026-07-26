@@ -5,7 +5,7 @@ import { redis } from '@/lib/redis';
 const AGENT_CONFIG_CACHE_KEY = 'agent-config:active';
 import { join } from 'path';
 const PROMPT_FILE = join(process.cwd(), 'src/agent/prompts/system-prompt.md');
-const DEFAULT_MODEL = 'claude-2.1';
+const DEFAULT_MODEL = 'llama-3.3-70b-versatile';
 const DEFAULT_ENABLED_TOOLS = [
   'search_vehicles',
   'get_vehicle_details',
@@ -20,10 +20,16 @@ export async function loadDefaultSystemPrompt(): Promise<string> {
 }
 
 export async function loadActiveAgentConfig(): Promise<AiAgentConfig> {
+  // Always load the current file-based system prompt so code changes
+  // take effect immediately without requiring a DB update or cache flush.
+  const filePrompt = await loadDefaultSystemPrompt();
+
   const cached = await redis.get(AGENT_CONFIG_CACHE_KEY);
   if (cached) {
     try {
-      return JSON.parse(cached) as AiAgentConfig;
+      const config = JSON.parse(cached) as AiAgentConfig;
+      // Override system_prompt with the current file version
+      return { ...config, system_prompt: filePrompt };
     } catch {
       console.warn('[AgentConfig] Failed to parse cached config');
     }
@@ -38,11 +44,10 @@ export async function loadActiveAgentConfig(): Promise<AiAgentConfig> {
     .single() as any;
 
   if (!data || error) {
-    const fallbackPrompt = await loadDefaultSystemPrompt();
     const fallback: AiAgentConfig = {
       id: 'default',
       config_key: 'default',
-      system_prompt: fallbackPrompt,
+      system_prompt: filePrompt,
       model: DEFAULT_MODEL,
       temperature: 0.25,
       max_tokens: 1024,
@@ -57,5 +62,6 @@ export async function loadActiveAgentConfig(): Promise<AiAgentConfig> {
   }
 
   await redis.set(AGENT_CONFIG_CACHE_KEY, JSON.stringify(data), 'EX', 60);
-  return data as AiAgentConfig;
+  // Always use file prompt — never serve a stale DB copy
+  return { ...(data as AiAgentConfig), system_prompt: filePrompt };
 }

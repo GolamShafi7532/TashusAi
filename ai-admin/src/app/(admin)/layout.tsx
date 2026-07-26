@@ -1,9 +1,41 @@
 'use strict';
 'use client';
 
-import React from 'react';
+import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { apiFetch } from '@/lib/apiFetch';
 import { usePathname, useRouter } from 'next/navigation';
+
+// v3.1.0: Token bucket cooldown alert component
+function TokenCooldownAlert() {
+  const [status, setStatus] = useState<any>(null);
+  const [show, setShow] = useState(false);
+
+  useEffect(() => {
+    const fetch_ = async () => {
+      try {
+        const res = await apiFetch('/api/admin/token-bucket');
+        if (res.ok) {
+          const data = await res.json();
+          setStatus(data);
+          setShow(data.allCoolingDown);
+        }
+      } catch {}
+    };
+    fetch_();
+    const interval = setInterval(fetch_, 5000);
+    return () => clearInterval(interval);
+  }, []);
+
+  if (!show || !status?.allCoolingDown) return null;
+
+  return (
+    <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full text-xs font-semibold bg-red-500/10 border border-red-500/20 text-red-400 animate-pulse">
+      <span className="w-1.5 h-1.5 rounded-full bg-red-400" />
+      All keys cooling: {status.nextAvailableIn}s
+    </div>
+  );
+}
 
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
@@ -19,6 +51,24 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   };
 
   const navItems = [
+    {
+      name: 'Analytics',
+      href: '/analytics',
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+        </svg>
+      ),
+    },
+     {
+      name: 'Test Chat',
+      href: '/test',
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5.36 5.36l-.707.707M5.686 5.686l.707.707" />
+        </svg>
+      ),
+    },
     {
       name: 'Sessions',
       href: '/sessions',
@@ -56,24 +106,17 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </svg>
       ),
     },
+    
     {
-      name: 'Analytics',
-      href: '/analytics',
+      name: 'Token Bucket',
+      href: '/token-bucket',
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 19v-6a2 2 0 00-2-2H5a2 2 0 00-2 2v6a2 2 0 002 2h2a2 2 0 002-2zm0 0V9a2 2 0 012-2h2a2 2 0 012 2v10m-6 0a2 2 0 002 2h2a2 2 0 002-2m0 0V5a2 2 0 012-2h2a2 2 0 012 2v14a2 2 0 01-2 2h-2a2 2 0 01-2-2z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M7 21h10a2 2 0 002-2V9.414a1 1 0 00-.293-.707l-5.414-5.414A1 1 0 0012.586 3H7a2 2 0 00-2 2v14a2 2 0 002 2z" />
         </svg>
       ),
     },
-    {
-      name: 'Test Chat',
-      href: '/test',
-      icon: (
-        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5.36 5.36l-.707.707M5.686 5.686l.707.707" />
-        </svg>
-      ),
-    },
+   
   ];
 
   return (
@@ -143,6 +186,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             {pathname.split('/')[1]?.replace('-', ' ') || 'Dashboard'}
           </h2>
           <div className="flex items-center gap-4">
+            {/* v3.1.0: Token bucket cooldown alert in header */}
+            <TokenCooldownAlert />
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />
               Ecosystem Online

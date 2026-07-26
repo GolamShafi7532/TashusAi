@@ -1,19 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db, isLocalDevMode } from '@/lib/supabase';
-import { verifyJwt } from '@/lib/auth';
+import { resolveAdmin } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
-
-async function resolveAdmin(req: Request) {
-  if (isLocalDevMode()) {
-    return { userId: 'local-dev-admin', email: 'dev@local', role: 'super_admin', displayName: 'Dev Admin' };
-  }
-  const token = req.headers.get('cookie')
-    ?.split(';')
-    .find((c) => c.trim().startsWith('admin_access_token='))
-    ?.split('=')[1];
-  return token ? await verifyJwt(token) : null;
-}
 
 /**
  * GET /api/admin/documents
@@ -21,8 +10,8 @@ async function resolveAdmin(req: Request) {
  */
 export async function GET(req: Request) {
   try {
-    const admin = await resolveAdmin(req);
-    if (!admin) {
+    let admin;
+    try { admin = await resolveAdmin(req); } catch {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 
@@ -49,8 +38,8 @@ export async function GET(req: Request) {
  */
 export async function POST(req: Request) {
   try {
-    const admin = await resolveAdmin(req);
-    if (!admin) {
+    let admin;
+    try { admin = await resolveAdmin(req); } catch {
       return NextResponse.json({ error: 'Unauthorized' }, { status: 401 });
     }
 

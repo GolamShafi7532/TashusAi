@@ -37,3 +37,11 @@ export type {
   TPhoto,
   TCarRate,
 } from './types';
+
+// v3.1.0 masked/filtered types (what the LLM and widget receive post-masking)
+export type {
+  MaskedVehicle,
+  MaskedVehicleDetails,
+  FilteredSearchResult,
+  FilterCriteria,
+} from './filter-engine';

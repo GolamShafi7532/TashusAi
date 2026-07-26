@@ -9,6 +9,7 @@ export interface ChatMessage {
   content: string;
   streaming?: boolean;
   createdAt: Date;
+  adminDisplayName?: string;
   toolName?: string; // for tool_start/result chips
   toolResult?: string;
 }

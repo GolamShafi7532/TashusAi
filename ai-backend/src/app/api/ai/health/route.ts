@@ -13,6 +13,8 @@
  */
 import { NextResponse } from 'next/server';
 import { db } from '@/db/client';
+
+export const dynamic = 'force-dynamic';
 import { redis } from '@/lib/redis';
 import { env } from '@/lib/env';
 

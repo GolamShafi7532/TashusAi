@@ -1,6 +1,8 @@
 import { NextResponse } from 'next/server';
 import { db } from '@/db/client';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * POST /api/ai/session
  * Create or resume a chat session identified by a visitor_id cookie (or body)
@@ -13,8 +15,13 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'visitorId required' }, { status: 400 });
   }
 
-  // Find or create session
-  const { data: existing } = (await db.from('ai_chat_sessions').select('*').eq('visitor_id', visitorId).limit(1).single()) as any;
+  // Find existing session or create a new one
+  const { data: existing } = await (db.from('ai_chat_sessions') as any)
+    .select('*')
+    .eq('visitor_id', visitorId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle();
 
   if (existing) {
     return NextResponse.json({ sessionId: existing.id });

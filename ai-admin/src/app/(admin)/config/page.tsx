@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-
+import { apiFetch } from '@/lib/apiFetch';
 const AVAILABLE_TOOLS = [
   { name: 'search_vehicles', description: 'Search available vehicles by criteria' },
   { name: 'check_availability', description: 'Check vehicle availability for specific dates' },
@@ -27,7 +27,7 @@ export default function AgentConfigPage() {
 
   const fetchConfig = async () => {
     try {
-      const res = await fetch('/api/admin/config/agent', {
+      const res = await apiFetch('/api/admin/config/agent', {
         credentials: 'include',
         cache: 'no-store',
       });
@@ -69,7 +69,7 @@ export default function AgentConfigPage() {
     setSuccess('');
 
     try {
-      const res = await fetch('/api/admin/config/agent', {
+      const res = await apiFetch('/api/admin/config/agent', {
         method: 'PATCH',
         credentials: 'include',
         headers: { 'Content-Type': 'application/json' },

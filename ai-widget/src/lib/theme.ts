@@ -90,4 +90,10 @@ export const WIDGET_CSS = `
     70%  { transform: scale(1.2); }
     100% { transform: scale(1); }
   }
+
+  @keyframes w-ring-pulse {
+    0%   { opacity: 0.6; transform: scale(1); }
+    70%  { opacity: 0; transform: scale(1.18); }
+    100% { opacity: 0; transform: scale(1.18); }
+  }
 `;

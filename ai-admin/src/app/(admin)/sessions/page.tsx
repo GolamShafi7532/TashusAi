@@ -1,196 +1,567 @@
-'use strict';
 'use client';
 
-import React, { useState, useEffect } from 'react';
-import Link from 'next/link';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
+
+// ═══════════════════════════════════════════════════════════════════════════
+// TYPES
+// ═══════════════════════════════════════════════════════════════════════════
+
+interface Session {
+  id: string;
+  visitor_id: string;
+  status: 'active' | 'handed_off' | 'closed' | 'archived';
+  is_ai_paused: boolean;
+  channel: string;
+  last_message: string;
+  message_count: number;
+  last_message_at: string;
+  started_at: string;
+  admin_name?: string;
+  assigned_admin_id?: string;
+}
+
+interface Message {
+  id: string;
+  role: 'user' | 'assistant' | 'admin' | 'system';
+  content: string;
+  created_at: string;
+  admin_name?: string;
+  admin_email?: string;
+}
+
+interface SessionDetail {
+  session: Session;
+  messages: Message[];
+  message_count: number;
+}
+
+interface Stats {
+  active: number;
+  handed_off: number;
+  closed_today: number;
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MAIN COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════
 
 export default function SessionsPage() {
-  const [sessions, setSessions] = useState<any[]>([]);
+  const [sessions, setSessions] = useState<Session[]>([]);
+  const [stats, setStats] = useState<Stats>({ active: 0, handed_off: 0, closed_today: 0 });
   const [loading, setLoading] = useState(true);
-  const [statusFilter, setStatusFilter] = useState('');
-  const [channelFilter, setChannelFilter] = useState('');
+  const [activeTab, setActiveTab] = useState<'all' | 'handoff'>('all');
+  const [searchQuery, setSearchQuery] = useState('');
+  const [selectedSessionId, setSelectedSessionId] = useState<string | null>(null);
 
-  const fetchSessions = async () => {
-    setLoading(true);
+  // SSE connection
+  const eventSourceRef = useRef<EventSource | null>(null);
+  const retryTimerRef = useRef<ReturnType<typeof setTimeout> | null>(null);
+
+  // ── Fetch sessions ─────────────────────────────────────────────────────────
+  const fetchSessions = useCallback(async (silent = false) => {
+    if (!silent) setLoading(true);
     try {
-      const query = new URLSearchParams();
-      if (statusFilter) query.set('status', statusFilter);
-      if (channelFilter) query.set('channel', channelFilter);
+      const params = new URLSearchParams();
+      if (activeTab === 'handoff') params.set('handoff', 'true');
 
-      const res = await fetch(`/api/admin/sessions?${query.toString()}`);
+      const res = await apiFetch(`/api/admin/sessions?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setSessions(data.sessions || []);
+        setStats(data.stats || { active: 0, handed_off: 0, closed_today: 0 });
       }
     } catch (err) {
-      console.error('Failed to load sessions:', err);
+      console.error('Failed to fetch sessions:', err);
     } finally {
-      setLoading(false);
+      if (!silent) setLoading(false);
     }
-  };
+  }, [activeTab]);
 
+  // ── SSE connection for real-time notifications ─────────────────────────────
+  useEffect(() => {
+    const connect = () => {
+      if (eventSourceRef.current) {
+        eventSourceRef.current.close();
+      }
+
+      const es = new EventSource('/api/admin/notifications/stream');
+      eventSourceRef.current = es;
+
+      es.addEventListener('handoff_requested', () => {
+        fetchSessions(true); // Silent refresh
+      });
+
+      es.onerror = () => {
+        es.close();
+        retryTimerRef.current = setTimeout(connect, 5000);
+      };
+    };
+
+    connect();
+
+    return () => {
+      if (eventSourceRef.current) eventSourceRef.current.close();
+      if (retryTimerRef.current) clearTimeout(retryTimerRef.current);
+    };
+  }, [fetchSessions]);
+
+  // ── Auto-refresh every 10 seconds ──────────────────────────────────────────
+  useEffect(() => {
+    const interval = setInterval(() => fetchSessions(true), 10000);
+    return () => clearInterval(interval);
+  }, [fetchSessions]);
+
+  // ── Initial load and tab change ────────────────────────────────────────────
   useEffect(() => {
     fetchSessions();
-  }, [statusFilter, channelFilter]);
+  }, [fetchSessions]);
 
-  const getStatusBadge = (status: string) => {
-    switch (status) {
-      case 'active':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#20B9BE]/10 border border-[#20B9BE]/20 text-[#20B9BE]">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#20B9BE]" />
-            Active
-          </span>
-        );
-      case 'handed_off':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-[#F2994A]/10 border border-[#F2994A]/20 text-[#F2994A] animate-pulse">
-            <span className="w-1.5 h-1.5 rounded-full bg-[#F2994A]" />
+  // ── Filter sessions by search query ────────────────────────────────────────
+  const filteredSessions = sessions.filter((s) =>
+    s.visitor_id.toLowerCase().includes(searchQuery.toLowerCase()) ||
+    s.id.toLowerCase().includes(searchQuery.toLowerCase())
+  );
+
+  return (
+    <div className="h-[calc(100vh-8rem)] bg-[#090D11] rounded-2xl overflow-hidden border border-[#1E293B] flex min-h-0">
+      {/* ═══════════════════════════════════════════════════════════════════════
+          LEFT PANEL - Session List
+          ═══════════════════════════════════════════════════════════════════ */}
+      <div className="w-[280px] bg-[#0F161E] border-r border-[#1E293B] flex flex-col overflow-hidden flex-shrink-0">
+        {/* Stats Strip */}
+        <div className="p-4 border-b border-[#1E293B]">
+          <div className="grid grid-cols-2 gap-2">
+            <div className="bg-[#090D11] rounded-lg p-3 border border-[#1E293B]">
+              <div className="text-[10px] font-semibold text-[#94A3B8] uppercase tracking-wider">Active</div>
+              <div className="text-2xl font-bold text-[#20B9BE] mt-1">{stats.active}</div>
+            </div>
+            <div className="bg-[#090D11] rounded-lg p-3 border border-[#1E293B]">
+              <div className="text-[10px] font-semibold text-[#94A3B8] uppercase tracking-wider">Handoff</div>
+              <div className="text-2xl font-bold text-[#F2994A] mt-1">{stats.handed_off}</div>
+            </div>
+          </div>
+        </div>
+
+        {/* Tabs */}
+        <div className="flex border-b border-[#1E293B] bg-[#090D11]">
+          <button
+            onClick={() => setActiveTab('all')}
+            className={`flex-1 px-4 py-3 text-xs font-semibold transition-all ${
+              activeTab === 'all'
+                ? 'text-[#20B9BE] border-b-2 border-[#20B9BE] bg-[#0F161E]'
+                : 'text-[#94A3B8] hover:text-white'
+            }`}
+          >
+            All Chats
+          </button>
+          <button
+            onClick={() => setActiveTab('handoff')}
+            className={`flex-1 px-4 py-3 text-xs font-semibold transition-all relative ${
+              activeTab === 'handoff'
+                ? 'text-[#F2994A] border-b-2 border-[#F2994A] bg-[#0F161E]'
+                : 'text-[#94A3B8] hover:text-white'
+            }`}
+          >
             Handoff
-          </span>
-        );
-      case 'closed':
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-500/10 border border-gray-500/20 text-gray-400">
-            <span className="w-1.5 h-1.5 rounded-full bg-gray-400" />
-            Closed
-          </span>
-        );
-      default:
-        return (
-          <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-semibold bg-gray-500/10 border border-gray-500/20 text-gray-400">
-            {status}
-          </span>
-        );
-    }
-  };
+            {stats.handed_off > 0 && (
+              <span className="ml-1.5 inline-flex items-center justify-center w-5 h-5 text-[10px] font-bold bg-[#F2994A] text-white rounded-full animate-pulse">
+                {stats.handed_off}
+              </span>
+            )}
+          </button>
+        </div>
 
-  const getChannelBadge = (channel: string) => {
-    switch (channel) {
-      case 'widget':
-        return 'bg-sky-500/10 text-sky-400 border-sky-500/20';
-      case 'email':
-        return 'bg-purple-500/10 text-purple-400 border-purple-500/20';
-      case 'voice':
-        return 'bg-pink-500/10 text-pink-400 border-pink-500/20';
-      default:
-        return 'bg-gray-500/10 text-gray-400 border-gray-500/20';
-    }
+        {/* Search */}
+        <div className="p-3 border-b border-[#1E293B]">
+          <input
+            type="text"
+            placeholder="Search visitor ID..."
+            value={searchQuery}
+            onChange={(e) => setSearchQuery(e.target.value)}
+            className="w-full bg-[#090D11] border border-[#1E293B] rounded-lg px-3 py-2 text-xs text-white placeholder-[#475569] focus:outline-none focus:border-[#20B9BE]"
+          />
+        </div>
+
+        {/* Session List */}
+        <div className="flex-1 overflow-y-auto">
+          {loading ? (
+            <div className="flex items-center justify-center h-32">
+              <svg className="animate-spin h-6 w-6 text-[#20B9BE]" fill="none" viewBox="0 0 24 24">
+                <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+                <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+              </svg>
+            </div>
+          ) : filteredSessions.length === 0 ? (
+            <div className="p-6 text-center text-sm text-[#475569]">No sessions found</div>
+          ) : (
+            filteredSessions.map((session) => (
+              <SessionCard
+                key={session.id}
+                session={session}
+                isActive={selectedSessionId === session.id}
+                onClick={() => setSelectedSessionId(session.id)}
+              />
+            ))
+          )}
+        </div>
+      </div>
+
+      {/* ═══════════════════════════════════════════════════════════════════════
+          RIGHT PANEL - Chat Detail
+          ═══════════════════════════════════════════════════════════════════ */}
+      <div className="flex-1 flex flex-col overflow-hidden min-w-0">
+        {selectedSessionId ? (
+          <InlineChatPanel
+            sessionId={selectedSessionId}
+            onClose={() => setSelectedSessionId(null)}
+            onUpdate={() => fetchSessions(true)}
+          />
+        ) : (
+          <div className="flex-1 flex items-center justify-center">
+            <div className="text-center">
+              <svg className="w-16 h-16 text-[#475569] mx-auto mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+              </svg>
+              <h3 className="text-white font-semibold text-lg">Select a conversation</h3>
+              <p className="text-sm text-[#94A3B8] mt-1">Choose a session from the list to view details</p>
+            </div>
+          </div>
+        )}
+      </div>
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// SESSION CARD COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+function SessionCard({ session, isActive, onClick }: {
+  session: Session;
+  isActive: boolean;
+  onClick: () => void;
+}) {
+  const isHandoff = session.is_ai_paused || session.status === 'handed_off';
+  const avatarColor = isHandoff ? '#F2994A' : '#20B9BE';
+  const avatarBg = isHandoff ? 'bg-[#F2994A]/10' : 'bg-[#20B9BE]/10';
+  const avatarInitials = session.visitor_id.substring(0, 2).toUpperCase();
+
+  const timeAgo = (dateStr: string) => {
+    const diff = Date.now() - new Date(dateStr).getTime();
+    const mins = Math.floor(diff / 60000);
+    if (mins < 1) return 'Just now';
+    if (mins < 60) return `${mins}m ago`;
+    const hours = Math.floor(mins / 60);
+    if (hours < 24) return `${hours}h ago`;
+    return `${Math.floor(hours / 24)}d ago`;
   };
 
   return (
-    <div className="space-y-6">
-      {/* Header Controls */}
-      <div className="flex flex-col sm:flex-row gap-4 items-stretch sm:items-center justify-between bg-[#0F161E] p-4 rounded-xl border border-[#1E293B]">
-        <div className="flex items-center gap-4 flex-wrap">
-          <div>
-            <label className="block text-[10px] font-semibold text-[#94A3B8] uppercase tracking-wider mb-1">
-              Status Filter
-            </label>
-            <select
-              value={statusFilter}
-              onChange={(e) => setStatusFilter(e.target.value)}
-              className="bg-[#090D11] border border-[#1E293B] rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#20B9BE]"
-            >
-              <option value="">All Statuses</option>
-              <option value="active">Active</option>
-              <option value="handed_off">Handoff</option>
-              <option value="closed">Closed</option>
-            </select>
-          </div>
-
-          <div>
-            <label className="block text-[10px] font-semibold text-[#94A3B8] uppercase tracking-wider mb-1">
-              Channel Filter
-            </label>
-            <select
-              value={channelFilter}
-              onChange={(e) => setChannelFilter(e.target.value)}
-              className="bg-[#090D11] border border-[#1E293B] rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#20B9BE]"
-            >
-              <option value="">All Channels</option>
-              <option value="widget">Chat Widget</option>
-              <option value="email">Email Inbox</option>
-              <option value="voice">Voice Call</option>
-            </select>
-          </div>
+    <div
+      onClick={onClick}
+      className={`p-4 border-b border-[#1E293B] cursor-pointer transition-all ${
+        isActive
+          ? 'bg-[rgba(32,185,190,0.1)] border-l-[3px] border-l-[#20B9BE]'
+          : 'hover:bg-[#090D11]'
+      }`}
+    >
+      <div className="flex items-start gap-3">
+        {/* Avatar */}
+        <div className={`relative flex-shrink-0 w-10 h-10 ${avatarBg} rounded-full flex items-center justify-center text-xs font-bold`} style={{ color: avatarColor }}>
+          {avatarInitials}
+          {isHandoff && (
+            <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-[#F2994A] rounded-full animate-pulse" />
+          )}
         </div>
 
-        <button
-          onClick={fetchSessions}
-          className="bg-[#1E293B] hover:bg-[#334155] border border-[#334155] text-xs font-semibold px-4 py-2 rounded-lg transition-all self-end sm:self-auto"
-        >
-          Refresh List
-        </button>
+        {/* Content */}
+        <div className="flex-1 min-w-0">
+          <div className="flex items-center justify-between gap-2 mb-1">
+            <span className="text-xs font-semibold text-white truncate">{session.visitor_id}</span>
+            <span className="text-[10px] text-[#94A3B8] flex-shrink-0">{timeAgo(session.last_message_at)}</span>
+          </div>
+          <p className="text-xs text-[#94A3B8] line-clamp-2 mb-2">{session.last_message || 'No messages yet'}</p>
+          {session.admin_name && (
+            <div className="text-[10px] text-[#20B9BE] font-medium">Assigned to {session.admin_name}</div>
+          )}
+        </div>
       </div>
-
-      {/* Grid List of Sessions */}
-      {loading ? (
-        <div className="flex items-center justify-center h-64">
-          <svg className="animate-spin h-8 w-8 text-[#20B9BE]" fill="none" viewBox="0 0 24 24">
-            <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
-            <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
-          </svg>
-        </div>
-      ) : sessions.length === 0 ? (
-        <div className="flex flex-col items-center justify-center bg-[#0F161E] border border-[#1E293B] rounded-2xl p-12 text-center">
-          <svg className="w-12 h-12 text-[#475569] mb-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={1.5} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
-          </svg>
-          <h3 className="text-white font-semibold text-lg">No sessions found</h3>
-          <p className="text-sm text-[#94A3B8] mt-1">Try modifying your filter settings</p>
-        </div>
-      ) : (
-        <div className="bg-[#0F161E] border border-[#1E293B] rounded-2xl overflow-hidden shadow-xl">
-          <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse">
-              <thead>
-                <tr className="border-b border-[#1E293B] text-[10px] font-bold text-[#94A3B8] uppercase tracking-wider bg-[#090D11]/30">
-                  <th className="px-6 py-4">Visitor Session</th>
-                  <th className="px-6 py-4">Status</th>
-                  <th className="px-6 py-4">Channel</th>
-                  <th className="px-6 py-4">Last Activity</th>
-                  <th className="px-6 py-4 text-right">Action</th>
-                </tr>
-              </thead>
-              <tbody className="divide-y divide-[#1E293B]">
-                {sessions.map((session) => (
-                  <tr key={session.id} className="hover:bg-[#1E293B]/20 transition-all">
-                    <td className="px-6 py-4">
-                      <div className="font-semibold text-white truncate max-w-[200px]">
-                        {session.visitor_id || 'anonymous_user'}
-                      </div>
-                      <div className="text-[10px] text-[#94A3B8] font-mono select-all">
-                        ID: {session.id}
-                      </div>
-                    </td>
-                    <td className="px-6 py-4">{getStatusBadge(session.status)}</td>
-                    <td className="px-6 py-4">
-                      <span className={`px-2 py-0.5 rounded text-[10px] font-bold border capitalize ${getChannelBadge(session.channel)}`}>
-                        {session.channel || 'widget'}
-                      </span>
-                    </td>
-                    <td className="px-6 py-4 text-sm text-[#94A3B8]">
-                      {new Date(session.last_message_at || session.started_at).toLocaleString()}
-                    </td>
-                    <td className="px-6 py-4 text-right">
-                      <Link
-                        href={`/sessions/${session.id}`}
-                        className="inline-flex items-center gap-1 bg-[#1E293B] hover:bg-[#20B9BE] hover:text-white border border-[#334155] text-xs font-semibold px-3 py-1.5 rounded-lg transition-all"
-                      >
-                        Open Chat
-                        <svg className="w-3.5 h-3.5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-                        </svg>
-                      </Link>
-                    </td>
-                  </tr>
-                ))}
-              </tbody>
-            </table>
-          </div>
-        </div>
-      )}
     </div>
   );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// INLINE CHAT PANEL COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+function InlineChatPanel({ sessionId, onClose, onUpdate }: {
+  sessionId: string;
+  onClose: () => void;
+  onUpdate: () => void;
+}) {
+  const [detail, setDetail] = useState<SessionDetail | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [composerText, setComposerText] = useState('');
+  const [sending, setSending] = useState(false);
+  const messagesEndRef = useRef<HTMLDivElement>(null);
+
+  // ── Fetch session detail ───────────────────────────────────────────────────
+  const fetchDetail = useCallback(async () => {
+    try {
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}`);
+      if (res.ok) {
+        const data = await res.json();
+        setDetail(data);
+      }
+    } catch (err) {
+      console.error('Failed to fetch session detail:', err);
+    } finally {
+      setLoading(false);
+    }
+  }, [sessionId]);
+
+  useEffect(() => {
+    fetchDetail();
+    const interval = setInterval(fetchDetail, 3000); // Poll every 3s
+    return () => clearInterval(interval);
+  }, [fetchDetail]);
+
+  useEffect(() => {
+    messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
+  }, [detail?.messages]);
+
+  // ── Actions ────────────────────────────────────────────────────────────────
+  const handleTakeover = async () => {
+    try {
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/takeover`, { method: 'POST' });
+      if (res.ok) {
+        await fetchDetail();
+        onUpdate();
+      }
+    } catch (err) {
+      console.error('Takeover failed:', err);
+    }
+  };
+
+  const handleRelease = async () => {
+    try {
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/release`, { method: 'POST' });
+      if (res.ok) {
+        await fetchDetail();
+        onUpdate();
+      }
+    } catch (err) {
+      console.error('Release failed:', err);
+    }
+  };
+
+  const handleClose = async () => {
+    try {
+      await apiFetch(`/api/admin/sessions/${sessionId}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ status: 'closed' }),
+      });
+      onUpdate();
+      onClose();
+    } catch (err) {
+      console.error('Close failed:', err);
+    }
+  };
+
+  const handleSend = async () => {
+    if (!composerText.trim() || sending) return;
+    setSending(true);
+    try {
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/messages`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ content: composerText.trim() }),
+      });
+      if (res.ok) {
+        setComposerText('');
+        await fetchDetail();
+        onUpdate();
+      }
+    } catch (err) {
+      console.error('Send failed:', err);
+    } finally {
+      setSending(false);
+    }
+  };
+
+  if (loading) {
+    return (
+      <div className="flex-1 flex items-center justify-center">
+        <svg className="animate-spin h-8 w-8 text-[#20B9BE]" fill="none" viewBox="0 0 24 24">
+          <circle className="opacity-25" cx="12" cy="12" r="10" stroke="currentColor" strokeWidth="4" />
+          <path className="opacity-75" fill="currentColor" d="M4 12a8 8 0 018-8V0C5.373 0 0 5.373 0 12h4zm2 5.291A7.962 7.962 0 014 12H0c0 3.042 1.135 5.824 3 7.938l3-2.647z" />
+        </svg>
+      </div>
+    );
+  }
+
+  if (!detail) return <div className="flex-1 flex items-center justify-center text-white">Session not found</div>;
+
+  const { session, messages } = detail;
+  const isPaused = session.is_ai_paused;
+  const isClosed = session.status === 'closed';
+
+  return (
+    <div className="flex-1 flex flex-col min-h-0 overflow-hidden">
+      {/* Header */}
+      <div className="bg-[#0F161E] border-b border-[#1E293B] p-4">
+        <div className="flex items-center justify-between mb-3">
+          <div>
+            <h2 className="text-white font-semibold text-sm">{session.visitor_id}</h2>
+            <p className="text-xs text-[#94A3B8] mt-0.5">Session {session.id.slice(0, 8)}</p>
+          </div>
+          <button onClick={onClose} className="text-[#94A3B8] hover:text-white transition-colors">
+            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M6 18L18 6M6 6l12 12" />
+            </svg>
+          </button>
+        </div>
+
+        {/* Status Badge */}
+        <div className="mb-3">
+          {isPaused ? (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-[#F2994A]/10 border border-[#F2994A]/20 text-[#F2994A]">
+              <span className="w-2 h-2 rounded-full bg-[#F2994A]" />
+              Handoff Mode
+            </span>
+          ) : (
+            <span className="inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-semibold bg-[#20B9BE]/10 border border-[#20B9BE]/20 text-[#20B9BE]">
+              <span className="w-2 h-2 rounded-full bg-[#20B9BE]" />
+              AI Active
+            </span>
+          )}
+        </div>
+
+        {/* Action Buttons */}
+        {!isClosed && (
+          <div className="flex gap-2">
+            {isPaused ? (
+              <button
+                onClick={handleRelease}
+                className="flex-1 bg-[#20B9BE] hover:bg-[#1a9a9e] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all"
+              >
+                ▶ Resume AI
+              </button>
+            ) : (
+              <button
+                onClick={handleTakeover}
+                className="flex-1 bg-[#F2994A] hover:bg-[#e0853d] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all"
+              >
+                Take Over
+              </button>
+            )}
+            <button
+              onClick={handleClose}
+              className="bg-[#1E293B] hover:bg-[#334155] text-white text-xs font-semibold px-4 py-2 rounded-lg transition-all"
+            >
+              Close
+            </button>
+          </div>
+        )}
+      </div>
+
+      {/* Messages */}
+      <div className="flex-1 overflow-y-auto p-4 space-y-3">
+        {messages.map((msg) => (
+          <MsgBubble key={msg.id} message={msg} />
+        ))}
+        <div ref={messagesEndRef} />
+      </div>
+
+      {/* Composer */}
+      {isPaused && !isClosed ? (
+        <div className="bg-[#0F161E] border-t border-[#1E293B] p-4">
+          <div className="flex gap-2">
+            <textarea
+              value={composerText}
+              onChange={(e) => setComposerText(e.target.value)}
+              onKeyDown={(e) => {
+                if (e.key === 'Enter' && !e.shiftKey) {
+                  e.preventDefault();
+                  handleSend();
+                }
+              }}
+              placeholder="Type your message..."
+              className="flex-1 bg-[#090D11] border border-[#1E293B] rounded-lg px-4 py-2 text-sm text-white placeholder-[#475569] focus:outline-none focus:border-[#20B9BE] resize-none"
+              rows={3}
+              style={{ maxHeight: '120px' }}
+            />
+            <button
+              onClick={handleSend}
+              disabled={!composerText.trim() || sending}
+              className="self-end bg-[#20B9BE] hover:bg-[#1a9a9e] disabled:bg-[#1E293B] disabled:text-[#475569] text-white text-xs font-semibold px-6 py-2 rounded-lg transition-all"
+            >
+              Send
+            </button>
+          </div>
+          <p className="text-[10px] text-[#94A3B8] mt-2">Press Enter to send, Shift+Enter for new line</p>
+        </div>
+      ) : !isPaused && !isClosed ? (
+        <div className="bg-[#0F161E] border-t border-[#1E293B] p-4">
+          <p className="text-sm text-[#94A3B8] text-center">
+            AI is active. Click <strong>Take Over</strong> to respond manually.
+          </p>
+        </div>
+      ) : null}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
+// MESSAGE BUBBLE COMPONENT
+// ═══════════════════════════════════════════════════════════════════════════
+
+function MsgBubble({ message }: { message: Message }) {
+  if (message.role === 'system') {
+    return (
+      <div className="flex justify-center">
+        <div className="bg-[#1E293B] border border-[#334155] rounded-lg px-4 py-2 text-xs text-[#94A3B8] max-w-md text-center">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+
+  if (message.role === 'user') {
+    return (
+      <div className="flex justify-end">
+        <div className="bg-[#20B9BE]/10 border border-[#20B9BE]/20 rounded-lg px-4 py-2 text-sm text-white max-w-md">
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+
+  if (message.role === 'assistant') {
+    return (
+      <div className="flex justify-start">
+        <div className="bg-[#0F161E] border border-[#1E293B] rounded-lg px-4 py-2 text-sm text-white max-w-md">
+          <div className="text-[10px] text-[#20B9BE] font-semibold mb-1">AI</div>
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+
+  if (message.role === 'admin') {
+    return (
+      <div className="flex justify-start">
+        <div className="bg-[#F2994A]/10 border border-[#F2994A]/20 rounded-lg px-4 py-2 text-sm text-white max-w-md">
+          <div className="text-[10px] text-[#F2994A] font-semibold mb-1">
+            {message.admin_name || 'Admin'}
+          </div>
+          {message.content}
+        </div>
+      </div>
+    );
+  }
+
+  return null;
 }

@@ -1,6 +1,8 @@
 'use client';
+'use client';
 
-import React, { useState, useRef, useEffect } from 'react';
+import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 
 // Simple UUID generator without external dependency
 const generateId = () => {
@@ -30,6 +32,204 @@ const PRESET_QUERIES = [
   "Tell me about the SUMMER25 voucher",
   "What are late fees?",
 ];
+
+// ── Key Attempts Status Bar ───────────────────────────────────────────────────
+
+function KeyAttemptsBar({ attempts }: {
+  attempts: Array<{ keyMasked: string; keyIndex: number; keyTotal: number; status: string; rateLimit?: boolean }>;
+}) {
+  if (attempts.length === 0) return null;
+  return (
+    <div className="flex items-center gap-1.5 flex-wrap px-1 py-1.5">
+      <span className="text-[9px] font-bold text-[#475569] uppercase tracking-wider mr-1">Keys:</span>
+      {attempts.map((k) => (
+        <span
+          key={k.keyIndex}
+          title={k.rateLimit ? 'Rate limited' : k.status === 'failed' ? 'Error' : k.status === 'success' ? 'Used successfully' : 'Trying...'}
+          className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-full text-[9px] font-bold border transition-all ${
+            k.status === 'failed'
+              ? 'bg-red-500/15 text-red-400 border-red-500/30 line-through'
+              : k.status === 'success'
+              ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+              : 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30 animate-pulse'
+          }`}
+        >
+          {k.status === 'trying'  && '⟳'}
+          {k.status === 'failed'  && '✗'}
+          {k.status === 'success' && '✓'}
+          {' '}#{k.keyIndex} {k.keyMasked}
+          {k.rateLimit && ' (429)'}
+        </span>
+      ))}
+    </div>
+  );
+}
+
+// ── Live Key Status Component ────────────────────────────────────────────────
+
+function LiveKeyStatusPanel({ status }: {
+  status: { keys: any[], availableCount: number, totalKeys: number, allCoolingDown: boolean, nextAvailableIn: number } | null;
+}) {
+  if (!status) return null;
+
+  return (
+    <div className="space-y-2 max-h-[320px] overflow-y-auto">
+      {/* Summary */}
+      <div className="grid grid-cols-2 gap-2">
+        <div className="bg-[#0a1628] border border-[#1E293B] rounded-lg p-2.5">
+          <div className="text-[9px] text-[#94A3B8] uppercase font-bold">Available</div>
+          <div className="text-2xl font-black mt-1" style={{ color: '#20B9BE' }}>
+            {status.availableCount}/{status.totalKeys}
+          </div>
+        </div>
+        <div className="bg-[#1a0a0a] border border-[#1E293B] rounded-lg p-2.5">
+          <div className="text-[9px] text-[#94A3B8] uppercase font-bold">Next Available</div>
+          <div className="text-2xl font-black mt-1" style={{ color: status.allCoolingDown ? '#f87171' : '#10b981' }}>
+            {status.allCoolingDown ? `${status.nextAvailableIn}s` : 'Now'}
+          </div>
+        </div>
+      </div>
+
+      {/* Keys list */}
+      <div className="space-y-1.5">
+        {status.keys.map((k: any) => (
+          <div key={k.index} className={`rounded-lg border p-2.5 text-[10px] ${
+            k.available
+              ? 'bg-[#0a1628] border-[#1E293B]'
+              : 'bg-[#1a0a0a] border-red-900/40'
+          }`}>
+            <div className="flex items-center justify-between mb-1">
+              <span className="font-mono font-bold text-[#94A3B8]">Key #{k.index} {k.masked}</span>
+              <span className={`px-1.5 py-0.5 rounded text-[8px] font-bold border ${
+                k.available
+                  ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                  : 'bg-red-500/20 text-red-400 border-red-500/30'
+              }`}>
+                {k.available ? '✓ Ready' : '⏳ Cooldown'}
+              </span>
+            </div>
+
+            {/* Stats */}
+            <div className="flex items-center gap-3 text-[9px] text-[#64748B] mb-1.5">
+              <span>✓ {k.successCount} success</span>
+              <span>✗ {k.failureCount} fail</span>
+            </div>
+
+            {/* Cooldown bar */}
+            {k.cooldownSeconds > 0 && (
+              <div>
+                <div className="flex items-center justify-between mb-0.5">
+                  <span className="text-[9px] font-bold text-red-400">{k.cooldownReason || 'Unknown'}</span>
+                  <span className="text-[9px] font-bold text-red-400">{k.cooldownSeconds}s</span>
+                </div>
+                <div className="w-full h-1.5 bg-[#0F161E] rounded-full overflow-hidden border border-red-500/30">
+                  <div
+                    className="h-full bg-gradient-to-r from-red-500 to-red-400 rounded-full transition-all"
+                    style={{
+                      width: `${((65 - k.cooldownSeconds) / 65) * 100}%`,
+                    }}
+                  />
+                </div>
+              </div>
+            )}
+          </div>
+        ))}
+      </div>
+    </div>
+  );
+}
+
+function ProviderStatusPanel({ backendUrl }: { backendUrl: string }) {
+  const [data, setData]       = useState<any>(null);
+  const [loading, setLoading] = useState(false);
+  const [lastRefresh, setLastRefresh] = useState<Date | null>(null);
+
+  const refresh = useCallback(async () => {
+    setLoading(true);
+    try {
+      // Use relative URL — goes through Next.js rewrite proxy, no CORS issue
+      const res = await apiFetch('/api/ai/test/provider-status');
+      if (res.ok) {
+        setData(await res.json());
+        setLastRefresh(new Date());
+      }
+    } catch {}
+    finally { setLoading(false); }
+  }, []);
+
+  useEffect(() => { refresh(); }, [refresh]);
+
+  const circuitBadge = (circuit: any) => {
+    if (!circuit || !circuit.open) return null;
+    const secsLeft = Math.max(0, Math.round((60000 - (Date.now() - circuit.openedAt)) / 1000));
+    return (
+      <span className="ml-1 px-1.5 py-0.5 rounded text-[9px] font-bold bg-red-500/20 text-red-400 border border-red-500/30">
+        OPEN {secsLeft}s
+      </span>
+    );
+  };
+
+  return (
+    <div className="p-3 space-y-2">
+      <div className="flex items-center justify-between mb-1">
+        <span className="text-[10px] text-[#475569]">Auto-refreshes on open</span>
+        <button
+          onClick={refresh}
+          disabled={loading}
+          className="text-[10px] px-2 py-1 rounded bg-[#1E293B] text-[#94A3B8] hover:text-white border border-[#334155] transition-all disabled:opacity-50"
+        >
+          {loading ? '...' : '↻ Refresh'}
+        </button>
+      </div>
+
+      {/* Per-provider rows */}
+      {(data?.providers ?? []).map((p: any) => (
+        <div key={p.name} className={`rounded-xl border p-2.5 ${
+          p.available ? 'bg-[#0a1628] border-[#1E293B]' : 'bg-[#1a0a0a] border-red-900/30'
+        }`}>
+          <div className="flex items-center justify-between mb-1">
+            <span className="text-xs font-bold text-white">{p.label}</span>
+            <div className="flex items-center gap-1">
+              {p.available
+                ? <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-emerald-500/20 text-emerald-400 border border-emerald-500/30">✓ {p.keys} key{p.keys !== 1 ? 's' : ''}</span>
+                : <span className="px-1.5 py-0.5 rounded text-[9px] font-bold bg-gray-500/20 text-gray-500 border border-gray-500/30">Not configured</span>
+              }
+              {circuitBadge(p.circuit)}
+            </div>
+          </div>
+          <div className="text-[10px] text-[#64748B] font-mono">{p.model}</div>
+          <div className="text-[9px] text-[#475569] mt-0.5">{p.costPer1M}</div>
+          {p.circuit?.lastError && (
+            <div className="text-[9px] text-red-400/70 mt-1 truncate" title={p.circuit.lastError}>
+              ⚠ {p.circuit.lastError.slice(0, 60)}
+            </div>
+          )}
+        </div>
+      ))}
+
+      {/* Groq key pool */}
+      {(data?.groqKeys ?? []).length > 0 && (
+        <div className="pt-1 border-t border-[#1E293B]">
+          <p className="text-[10px] font-semibold text-[#94A3B8] uppercase tracking-wider mb-1.5">Groq Key Pool</p>
+          <div className="space-y-1">
+            {data.groqKeys.map((k: any) => (
+              <div key={k.index} className="flex items-center justify-between text-[10px]">
+                <span className="font-mono text-[#475569]">Key #{k.index}</span>
+                <span className="font-mono text-[#64748B]">{k.masked}</span>
+              </div>
+            ))}
+          </div>
+        </div>
+      )}
+
+      {lastRefresh && (
+        <p className="text-[9px] text-[#334155] text-right pt-1">
+          Updated {lastRefresh.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit', second: '2-digit' })}
+        </p>
+      )}
+    </div>
+  );
+}
 
 interface VehicleProps {
   id?: string | number;
@@ -137,7 +337,7 @@ function TestVehicleCard({ vehicle }: { vehicle: VehicleProps }) {
 function parseRichContent(text: string) {
   if (!text) return null;
 
-  const regex = /\[(VEHICLE|VOUCHER):\s*(\{.*?\})\]/gs;
+  const regex = /\[(VEHICLE|VOUCHER):\s*(\{.*?\})\]/g;  // Note: 's' flag not needed — dots in JSON don't span newlines
   const parts = [];
   let lastIndex = 0;
   let match;
@@ -252,7 +452,7 @@ function parseRichContent(text: string) {
 }
 
 export default function TestChatPage() {
-  const [testSessionId] = useState(() => `test:${generateId()}`);
+  const [testSessionId, setTestSessionId] = useState('test:session');
   const [messages, setMessages] = useState<Message[]>([]);
   const [inputValue, setInputValue] = useState('');
   const [isLoading, setIsLoading] = useState(false);
@@ -263,8 +463,20 @@ export default function TestChatPage() {
   const [contextData, setContextData] = useState<any>(null);
   const [showTools, setShowTools] = useState(false);
   const [toolsData, setToolsData] = useState<any>(null);
+  const [showApiKeys, setShowApiKeys] = useState(true);
+  const [showTestInfo, setShowTestInfo] = useState(false);
+  const [showProviders, setShowProviders] = useState(true);
+  // Live key attempt tracking — shows which key is being tried per message
+  const [keyAttempts, setKeyAttempts] = useState<Array<{
+    keyMasked: string; keyIndex: number; keyTotal: number;
+    status: 'trying' | 'failed' | 'success'; rateLimit?: boolean;
+  }>>([]);
+  // v3.1.0: Live key status from token bucket — shows cooldown timers per key
+  const [liveKeyStatus, setLiveKeyStatus] = useState<any>(null);
+  const [keyTimers, setKeyTimers] = useState<Record<string, number>>({});
   const messagesEndRef = useRef<HTMLDivElement>(null);
   const eventSourceRef = useRef<EventSource | null>(null);
+  const timerIntervalRef = useRef<NodeJS.Timeout | null>(null);
 
   const scrollToBottom = () => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
@@ -273,6 +485,36 @@ export default function TestChatPage() {
   useEffect(() => {
     scrollToBottom();
   }, [messages, streamingContent]);
+
+  // v3.1.0: Fetch live token bucket status every 2s
+  useEffect(() => {
+    const fetchKeyStatus = async () => {
+      try {
+        const res = await apiFetch('/api/admin/token-bucket');
+        if (res.ok) {
+          const data = await res.json();
+          setLiveKeyStatus(data);
+          // Build cooldown timers map
+          const timers: Record<string, number> = {};
+          data.keys?.forEach((k: any) => {
+            if (k.cooldownSeconds > 0) {
+              timers[k.masked] = k.cooldownSeconds;
+            }
+          });
+          setKeyTimers(timers);
+        }
+      } catch (err) {
+        console.error('Failed to fetch key status:', err);
+      }
+    };
+    fetchKeyStatus();
+    const interval = setInterval(fetchKeyStatus, 2000);
+    return () => clearInterval(interval);
+  }, []);
+
+  useEffect(() => {
+    setTestSessionId(`test:${generateId()}`);
+  }, []);
 
   const handleSendMessage = async (text?: string) => {
     const messageText = text || inputValue.trim();
@@ -292,6 +534,7 @@ export default function TestChatPage() {
     setStreamingContent('');
     setCurrentToolCalls([]);
     setSources([]);
+    setKeyAttempts([]);  // reset key tracking for new message
 
     try {
       // Call streaming endpoint
@@ -354,7 +597,41 @@ export default function TestChatPage() {
                   } else if (eventType === 'tool_result') {
                     toolCalls = toolCalls.map(t => t.tool === data.tool ? { ...t, status: 'completed', result: data.result } : t);
                     setCurrentToolCalls(toolCalls);
+                  } else if (eventType === 'key_attempt') {
+                    setKeyAttempts(prev => {
+                      const exists = prev.find(k => k.keyIndex === data.keyIndex);
+                      if (exists) return prev;
+                      return [...prev, {
+                        keyMasked: data.keyMasked,
+                        keyIndex: data.keyIndex,
+                        keyTotal: data.keyTotal,
+                        status: 'trying',
+                      }];
+                    });
+                  } else if (eventType === 'key_failed') {
+                    setKeyAttempts(prev => {
+                      const existing = prev.find(k => k.keyIndex === data.keyIndex);
+                      if (existing) {
+                        return prev.map(k =>
+                          k.keyIndex === data.keyIndex
+                            ? { ...k, status: 'failed', rateLimit: data.rateLimit }
+                            : k
+                        );
+                      }
+
+                      return [...prev, {
+                        keyMasked: data.keyMasked || `key-${data.keyIndex}`,
+                        keyIndex: data.keyIndex,
+                        keyTotal: data.keyTotal || 1,
+                        status: 'failed',
+                        rateLimit: data.rateLimit,
+                      }];
+                    });
                   } else if (eventType === 'done') {
+                    // Mark last non-failed key as success
+                    setKeyAttempts(prev => prev.map((k, i) =>
+                      i === prev.length - 1 && k.status === 'trying' ? { ...k, status: 'success' } : k
+                    ));
                     eventSources = data.sources || [];
                     setSources(eventSources);
                   } else if (eventType === 'error') {
@@ -451,9 +728,9 @@ export default function TestChatPage() {
   };
 
   return (
-    <div className="grid grid-cols-1 lg:grid-cols-3 gap-6 h-full">
+    <div className="grid grid-cols-1 lg:grid-cols-[minmax(0,2fr)_360px] gap-6 h-[calc(100vh-8rem)] min-h-0">
       {/* Main Chat Area */}
-      <div className="lg:col-span-2 flex flex-col bg-[#0F161E] rounded-2xl border border-[#1E293B] overflow-hidden shadow-xl">
+      <div className="flex flex-col min-h-0 bg-[#0F161E] rounded-2xl border border-[#1E293B] overflow-hidden shadow-xl">
         {/* Header */}
         <div className="p-6 border-b border-[#1E293B] bg-gradient-to-r from-[#20B9BE]/5 to-transparent">
           <div className="flex items-start justify-between">
@@ -472,10 +749,16 @@ export default function TestChatPage() {
             <span className="w-2 h-2 rounded-full bg-[#20B9BE] animate-pulse" />
             <span>Session ID: {testSessionId.substring(0, 12)}...</span>
           </div>
+          {/* Live key attempts bar — shows during and after each message */}
+          {keyAttempts.length > 0 && (
+            <div className="mt-2 border-t border-[#1E293B] pt-2">
+              <KeyAttemptsBar attempts={keyAttempts} />
+            </div>
+          )}
         </div>
 
         {/* Messages Area */}
-        <div className="flex-1 overflow-y-auto p-6 space-y-4">
+        <div className="flex-1 min-h-0 overflow-y-auto p-6 space-y-4">
           {messages.length === 0 && (
             <div className="flex items-center justify-center h-full">
               <div className="text-center">
@@ -518,10 +801,16 @@ export default function TestChatPage() {
             </div>
           ))}
 
-          {isLoading && streamingContent && (
+          {isLoading && (keyAttempts.length > 0 || streamingContent) && (
             <div className="flex justify-start w-full">
               <div className="w-full max-w-full md:max-w-[85%] px-4 py-3 rounded-lg bg-[#1E293B] text-[#E4E6EB] border border-[#334155]">
-                {parseRichContent(streamingContent)}
+                {/* Show key attempts while waiting for response */}
+                {!streamingContent && keyAttempts.length > 0 && (
+                  <div className="mb-2">
+                    <KeyAttemptsBar attempts={keyAttempts} />
+                  </div>
+                )}
+                {streamingContent && parseRichContent(streamingContent)}
                 <div className="mt-2 flex gap-1">
                   <div className="w-2 h-2 rounded-full bg-[#20B9BE] animate-pulse" />
                   <div className="w-2 h-2 rounded-full bg-[#20B9BE] animate-pulse" style={{ animationDelay: '0.1s' }} />
@@ -581,7 +870,7 @@ export default function TestChatPage() {
       </div>
 
       {/* Sidebar Panels */}
-      <div className="space-y-4">
+      <div className="space-y-4 min-h-0 overflow-y-auto pr-1 lg:pb-2">
         {/* Context Inspector */}
         <div className="bg-[#0F161E] rounded-2xl border border-[#1E293B] overflow-hidden shadow-xl">
           <button
@@ -682,24 +971,118 @@ export default function TestChatPage() {
           )}
         </div>
 
-        {/* Test Info */}
-        <div className="bg-[#0F161E] rounded-2xl border border-[#1E293B] p-4">
-          <h3 className="font-bold text-white mb-3 flex items-center gap-2">
-            <span>ℹ️</span> Test Info
-          </h3>
-          <div className="space-y-2 text-xs text-[#94A3B8]">
-            <p><span className="font-semibold">Mode:</span> Test (ephemeral)</p>
-            <p><span className="font-semibold">Messages:</span> {messages.length}</p>
-            <p><span className="font-semibold">Session TTL:</span> 1 hour</p>
-            <div className="mt-4 p-3 rounded bg-blue-500/10 border border-blue-500/20 text-blue-300 text-xs">
-              <p className="font-semibold mb-1">💡 Tips:</p>
-              <ul className="space-y-1 list-disc list-inside">
-                <li>Use preset queries for quick testing</li>
-                <li>Inspect RAG context to debug retrieval</li>
-                <li>Check enabled tools before testing</li>
-              </ul>
+        {/* API Key Status — collapsible */}
+        {/* <div className="bg-[#0F161E] rounded-2xl border border-[#1E293B] overflow-hidden shadow-xl">
+          <button
+            onClick={() => setShowApiKeys(!showApiKeys)}
+            className="w-full p-4 border-b border-[#1E293B] bg-gradient-to-r from-[#20B9BE]/5 to-transparent flex items-center justify-between hover:bg-[#20B9BE]/10 transition-all"
+          >
+            <h3 className="font-bold text-white flex items-center gap-2">
+              <span>🔐</span> API Key Status
+            </h3>
+            <span className="text-[#64748B]">{showApiKeys ? '−' : '+'}</span>
+          </button>
+          {showApiKeys && (
+            <div className="p-4 space-y-3">
+              <div className="flex items-center justify-between text-[11px] text-[#94A3B8]">
+                <span>Live key usage for the current run</span>
+                <span className="font-semibold text-[#20B9BE]">{keyAttempts.length} tracked</span>
+              </div>
+
+              {keyAttempts.length === 0 ? (
+                <div className="rounded-lg border border-dashed border-[#334155] p-3 text-[11px] text-[#64748B]">
+                  No API key activity yet. Keys will appear here as the agent tries them.
+                </div>
+              ) : (
+                <div className="space-y-2">
+                  {keyAttempts.map((attempt) => {
+                    const statusTone = attempt.status === 'trying'
+                      ? 'bg-yellow-500/15 text-yellow-400 border-yellow-500/30'
+                      : attempt.status === 'success'
+                      ? 'bg-emerald-500/15 text-emerald-400 border-emerald-500/30'
+                      : 'bg-red-500/15 text-red-400 border-red-500/30';
+
+                    const statusText = attempt.rateLimit
+                      ? 'Rate limited'
+                      : attempt.status === 'trying'
+                      ? 'Trying now'
+                      : attempt.status === 'success'
+                      ? 'Used successfully'
+                      : 'Failed';
+
+                    return (
+                      <div key={`${attempt.keyIndex}-${attempt.keyMasked}`} className="rounded-lg border border-[#1E293B] bg-[#111827] p-2.5">
+                        <div className="flex items-start justify-between gap-2">
+                          <div>
+                            <p className="text-[11px] font-semibold text-white">#{attempt.keyIndex} {attempt.keyMasked}</p>
+                            <p className="text-[10px] text-[#64748B] mt-0.5">{attempt.keyTotal} key{attempt.keyTotal !== 1 ? 's' : ''} in pool</p>
+                          </div>
+                          <span className={`inline-flex items-center rounded-full border px-2 py-0.5 text-[9px] font-bold uppercase tracking-wider ${statusTone}`}>
+                            {statusText}
+                          </span>
+                        </div>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {isLoading && keyAttempts.length > 0 && (
+                <div className="rounded-lg border border-[#20B9BE]/20 bg-[#20B9BE]/10 p-2 text-[10px] text-[#20B9BE]">
+                  Current run is active and key status updates in real time.
+                </div>
+              )}
             </div>
-          </div>
+          )}
+        </div> */}
+
+        {/* Test Info — collapsible */}
+        <div className="bg-[#0F161E] rounded-2xl border border-[#1E293B] overflow-hidden shadow-xl">
+          <button
+            onClick={() => setShowTestInfo(!showTestInfo)}
+            className="w-full p-4 border-b border-[#1E293B] bg-gradient-to-r from-[#20B9BE]/5 to-transparent flex items-center justify-between hover:bg-[#20B9BE]/10 transition-all"
+          >
+            <h3 className="font-bold text-white flex items-center gap-2">
+              <span>ℹ️</span> Test Info
+            </h3>
+            <span className="text-[#64748B]">{showTestInfo ? '−' : '+'}</span>
+          </button>
+          {showTestInfo && (
+            <div className="p-4">
+              <div className="space-y-2 text-xs text-[#94A3B8]">
+                <p><span className="font-semibold text-white">Mode:</span> Test (ephemeral)</p>
+                <p><span className="font-semibold text-white">Messages:</span> {messages.length}</p>
+                <p><span className="font-semibold text-white">Session TTL:</span> 1 hour</p>
+                <p className="font-mono text-[9px] text-[#475569] break-all">ID: {testSessionId}</p>
+                <div className="mt-3 p-3 rounded bg-blue-500/10 border border-blue-500/20 text-blue-300 text-xs">
+                  <p className="font-semibold mb-1">💡 Tips:</p>
+                  <ul className="space-y-1 list-disc list-inside">
+                    <li>Use preset queries for quick testing</li>
+                    <li>Inspect RAG context to debug retrieval</li>
+                    <li>Check enabled tools before testing</li>
+                  </ul>
+                </div>
+              </div>
+            </div>
+          )}
+        </div>
+
+        {/* LLM Provider Status — collapsible */}
+        <div className="bg-[#0F161E] rounded-2xl border border-[#1E293B] overflow-hidden shadow-xl">
+          <button
+            onClick={() => setShowProviders(!showProviders)}
+            className="w-full p-4 border-b border-[#1E293B] bg-gradient-to-r from-[#20B9BE]/5 to-transparent flex items-center justify-between hover:bg-[#20B9BE]/10 transition-all"
+          >
+            <h3 className="font-bold text-white flex items-center gap-2">
+              <span>🔑</span> API Key Status
+            </h3>
+            <span className="text-[#64748B]">{showProviders ? '−' : '+'}</span>
+          </button>
+          {showProviders && (
+            <div className="p-0">
+              <LiveKeyStatusPanel status={liveKeyStatus} />
+            </div>
+          )}
         </div>
       </div>
     </div>

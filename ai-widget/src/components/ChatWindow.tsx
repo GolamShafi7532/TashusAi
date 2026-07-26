@@ -29,84 +29,224 @@ export default function ChatWindow({
 }: ChatWindowProps) {
   const scrollRef = useRef<HTMLDivElement | null>(null);
 
-  // Auto-scroll scroll container to bottom on message updates
+  const prevLengthRef = useRef(messages.length);
+
   useEffect(() => {
     if (scrollRef.current) {
-      scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+      const shouldSmooth = messages.length !== prevLengthRef.current;
+      prevLengthRef.current = messages.length;
+
+      const container = scrollRef.current;
+      
+      // Scroll immediately
+      requestAnimationFrame(() => {
+        if (container) {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: shouldSmooth ? 'smooth' : 'auto'
+          });
+        }
+      });
+
+      // Delayed fallback scroll (catches dynamic DOM expansion or rendering delays)
+      const timer = setTimeout(() => {
+        if (container) {
+          container.scrollTo({
+            top: container.scrollHeight,
+            behavior: shouldSmooth ? 'smooth' : 'auto'
+          });
+        }
+      }, 100);
+
+      return () => clearTimeout(timer);
     }
   }, [messages, streaming]);
 
   if (!isOpen) return null;
 
-  // Find if there is an active tool run currently streaming
   const activeToolMessage = messages.find((m) => m.role === 'system' && m.toolName);
 
   return (
     <div
-      className="fixed bottom-20 right-0 sm:right-4 w-full sm:w-[400px] h-[calc(100vh-6rem)] sm:h-[600px] bg-[#0F161E] border border-[#1E293B] sm:rounded-2xl overflow-hidden shadow-2xl flex flex-col z-[999998]"
       style={{
-        animation: 'w-slide-up 0.25s cubic-bezier(0.16, 1, 0.3, 1) forwards',
+        position: 'fixed',
+        bottom: '84px',
+        right: '20px',
+        width: '380px',
+        height: '520px',
+        background: 'linear-gradient(145deg, #fdfbff 0%, #f8f5fc 50%, #fef7ff 100%)',
+        border: '1px solid rgba(128, 19, 127, 0.12)',
+        borderRadius: '20px',
+        overflow: 'hidden',
+        boxShadow: '0 24px 64px rgba(128,19,127,0.15), 0 0 0 1px rgba(128,19,127,0.06), 0 8px 32px rgba(0,0,0,0.08)',
+        display: 'flex',
+        flexDirection: 'column',
+        zIndex: 999998,
+        animation: 'w-slide-up 0.28s cubic-bezier(0.16, 1, 0.3, 1) forwards',
       }}
     >
-      {/* Header */}
-      <header className="px-5 py-4 border-b border-[#1E293B] bg-[#090D11]/30 flex items-center justify-between">
-        <div className="flex items-center gap-2.5">
-          <div className="p-1 bg-[#20B9BE]/10 rounded-lg border border-[#20B9BE]/20 text-[#20B9BE]">
-            <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
+      {/* ── Header ─────────────────────────────────────────────────── */}
+      <div style={{
+        padding: '14px 16px',
+        background: 'linear-gradient(135deg, #80137f 0%, #9d1b9c 100%)',
+        borderBottom: '1px solid rgba(128,19,127,0.15)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'space-between',
+        flexShrink: 0,
+      }}>
+        <div style={{ display: 'flex', alignItems: 'center', gap: '10px' }}>
+          {/* Avatar */}
+          <div style={{
+            width: '36px',
+            height: '36px',
+            borderRadius: '10px',
+            background: 'rgba(255,255,255,0.2)',
+            border: '1px solid rgba(255,255,255,0.3)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+          }}>
+            <svg width="18" height="18" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={2}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M8 10h.01M12 10h.01M16 10h.01M9 16H5a2 2 0 01-2-2V6a2 2 0 012-2h14a2 2 0 012 2v8a2 2 0 01-2 2h-5l-5 5v-5z" />
             </svg>
           </div>
           <div>
-            <h3 className="font-bold text-white text-xs leading-none">Tashus Support</h3>
-            <span className="inline-flex items-center gap-1 text-[9px] text-emerald-400 font-semibold mt-1">
-              <span className="w-1 h-1 rounded-full bg-emerald-400 animate-pulse" />
-              Online
-            </span>
+            <div style={{ fontWeight: 700, color: '#fff', fontSize: '13px', lineHeight: 1.2, letterSpacing: '-0.01em' }}>
+              Tashus Support AI
+            </div>
+            <div style={{ display: 'flex', alignItems: 'center', gap: '5px', marginTop: '3px' }}>
+              <span style={{
+                width: '6px', height: '6px', borderRadius: '50%',
+                background: '#4ade80',
+                boxShadow: '0 0 6px #4ade80',
+                display: 'inline-block',
+                animation: 'w-pulse 2s infinite',
+              }} />
+              <span style={{ fontSize: '10px', color: 'rgba(255,255,255,0.7)', fontWeight: 600, letterSpacing: '0.05em', textTransform: 'uppercase' }}>
+                Online
+              </span>
+            </div>
           </div>
         </div>
+
+        {/* Close button */}
         <button
           onClick={onClose}
-          className="text-[#94A3B8] hover:text-white p-1 hover:bg-[#1E293B] rounded-lg transition-all"
-          title="Minimize chat"
+          style={{
+            width: '30px', height: '30px',
+            borderRadius: '8px',
+            background: 'rgba(255,255,255,0.15)',
+            border: '1px solid rgba(255,255,255,0.25)',
+            color: '#fff',
+            cursor: 'pointer',
+            display: 'flex', alignItems: 'center', justifyContent: 'center',
+            transition: 'all 0.15s',
+          }}
+          onMouseEnter={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.25)')}
+          onMouseLeave={e => (e.currentTarget.style.background = 'rgba(255,255,255,0.15)')}
         >
-          <svg className="w-4 h-4" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-            <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2.5} d="M19 9l-7 7-7-7" />
+          <svg width="14" height="14" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+            <path strokeLinecap="round" strokeLinejoin="round" d="M19 9l-7 7-7-7" />
           </svg>
         </button>
-      </header>
+      </div>
 
-      {/* Body messages */}
+      {/* ── Messages ────────────────────────────────────────────────── */}
       <div
         ref={scrollRef}
-        className="flex-1 overflow-y-auto p-4 space-y-1.5 scrollbar-thin bg-[#090D11]/10"
+        onLoadCapture={() => {
+          if (scrollRef.current) {
+            scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
+          }
+        }}
+        style={{
+          flex: 1,
+          overflowY: 'auto',
+          padding: '18px 16px 20px',
+          display: 'flex',
+          flexDirection: 'column',
+          gap: '14px',
+          background: 'transparent',
+        }}
       >
         {loading ? (
-          /* Loading Skeleton */
-          <div className="space-y-4 py-4">
-            <div className="flex justify-start max-w-[70%]">
-              <div className="bg-[#1E293B] rounded-2xl rounded-tl-none p-3.5 w-full space-y-2 animate-pulse">
-                <div className="h-2 w-12 bg-[#334155] rounded" />
-                <div className="h-3 w-40 bg-[#334155] rounded" />
+          /* Skeleton */
+          <div style={{ display: 'flex', flexDirection: 'column', gap: '12px', paddingTop: '8px' }}>
+            {[70, 50, 80].map((w, i) => (
+              <div key={i} style={{
+                display: 'flex',
+                justifyContent: i % 2 === 0 ? 'flex-start' : 'flex-end',
+              }}>
+                <div style={{
+                  width: `${w}%`,
+                  height: '42px',
+                  borderRadius: '12px',
+                  background: 'rgba(128,19,127,0.08)',
+                  border: '1px solid rgba(128,19,127,0.12)',
+                  animation: 'w-pulse 1.6s ease-in-out infinite',
+                }} />
               </div>
-            </div>
-            <div className="flex justify-end max-w-[70%] ml-auto">
-              <div className="bg-[#20B9BE]/30 rounded-2xl rounded-tr-none p-3.5 w-full space-y-2 animate-pulse">
-                <div className="h-2 w-12 bg-[#20B9BE]/40 rounded" />
-                <div className="h-3 w-32 bg-[#20B9BE]/40 rounded" />
-              </div>
-            </div>
+            ))}
           </div>
         ) : messages.length === 0 ? (
-          <div className="flex flex-col items-center justify-center text-center py-16 px-6">
-            <div className="p-3 bg-[#20B9BE]/10 rounded-2xl text-[#20B9BE] mb-3">
-              <svg className="w-6 h-6" fill="none" viewBox="0 0 24 24" stroke="currentColor">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
+          /* Empty state */
+          <div style={{
+            display: 'flex', flexDirection: 'column', alignItems: 'center',
+            justifyContent: 'center', height: '100%', textAlign: 'center', padding: '24px',
+          }}>
+            <div style={{
+              width: '56px', height: '56px', borderRadius: '16px',
+              background: 'linear-gradient(135deg, #80137f, #9d1b9c)',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              marginBottom: '16px',
+              boxShadow: '0 8px 24px rgba(128,19,127,0.25)',
+            }}>
+              <svg width="26" height="26" fill="none" viewBox="0 0 24 24" stroke="white" strokeWidth={1.8}>
+                <path strokeLinecap="round" strokeLinejoin="round" d="M8 12h.01M12 12h.01M16 12h.01M21 12c0 4.418-4.03 8-9 8a9.863 9.863 0 01-4.255-.949L3 20l1.395-3.72C3.512 15.042 3 13.574 3 12c0-4.418 4.03-8 9-8s9 3.582 9 8z" />
               </svg>
             </div>
-            <h4 className="text-white font-bold text-xs">Welcome to Tashus Support</h4>
-            <p className="text-[10px] text-[#94A3B8] leading-relaxed mt-1">
-              Ask about vehicle availability, rental policies, promotional vouchers, and insurance coverage.
-            </p>
+            <div style={{ fontSize: '15px', fontWeight: 700, color: '#1a1a1a', marginBottom: '8px' }}>
+              Welcome to Tashus Support
+            </div>
+            <div style={{ fontSize: '12px', color: 'rgba(0,0,0,0.5)', lineHeight: 1.6, maxWidth: '240px' }}>
+              Ask about vehicle availability, rental policies, vouchers, or anything about Tashus.
+            </div>
+
+            {/* Quick prompts */}
+            <div style={{ marginTop: '20px', display: 'flex', flexDirection: 'column', gap: '7px', width: '100%' }}>
+              {['Find a car in Sydney this weekend', 'What are the rental policies?', 'Do you have any active vouchers?'].map((q) => (
+                <button
+                  key={q}
+                  onClick={() => onSend(q)}
+                  style={{
+                    padding: '9px 14px',
+                    borderRadius: '10px',
+                    background: 'rgba(128,19,127,0.06)',
+                    border: '1px solid rgba(128,19,127,0.15)',
+                    color: 'rgba(0,0,0,0.7)',
+                    fontSize: '11px',
+                    fontWeight: 500,
+                    cursor: 'pointer',
+                    textAlign: 'left',
+                    transition: 'all 0.15s',
+                  }}
+                  onMouseEnter={e => {
+                    e.currentTarget.style.background = 'rgba(128,19,127,0.12)';
+                    e.currentTarget.style.color = '#1a1a1a';
+                    e.currentTarget.style.borderColor = 'rgba(128,19,127,0.25)';
+                  }}
+                  onMouseLeave={e => {
+                    e.currentTarget.style.background = 'rgba(128,19,127,0.06)';
+                    e.currentTarget.style.color = 'rgba(0,0,0,0.7)';
+                    e.currentTarget.style.borderColor = 'rgba(128,19,127,0.15)';
+                  }}
+                >
+                  {q}
+                </button>
+              ))}
+            </div>
           </div>
         ) : (
           messages.map((msg) => (
@@ -114,25 +254,31 @@ export default function ChatWindow({
           ))
         )}
 
-        {/* System level tool loaders */}
-        {streaming && activeToolMessage && activeToolMessage.toolName && (
-          <div className="flex justify-start w-full my-2">
+        {/* Tool activity indicator */}
+        {streaming && activeToolMessage?.toolName && (
+          <div style={{ display: 'flex', justifyContent: 'flex-start', marginTop: '6px' }}>
             <ToolActivityChip toolName={activeToolMessage.toolName} />
           </div>
         )}
 
-        {/* Global Error Banner */}
+        {/* Error */}
         {error && (
-          <div className="p-3 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-[10px] text-center my-2 select-none">
+          <div style={{
+            padding: '10px 14px',
+            background: 'rgba(239,68,68,0.08)',
+            border: '1px solid rgba(239,68,68,0.2)',
+            borderRadius: '10px',
+            color: '#dc2626',
+            fontSize: '11px',
+            textAlign: 'center',
+            margin: '8px 0',
+          }}>
             {error}
           </div>
         )}
       </div>
 
-      {/* Takeover Handoff alert banner */}
       {paused && <HandoffBanner />}
-
-      {/* Composer Input */}
       <Composer onSend={onSend} disabled={loading || streaming} />
     </div>
   );

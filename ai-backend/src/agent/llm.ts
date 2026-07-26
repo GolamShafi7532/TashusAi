@@ -1,5 +1,6 @@
 import { env } from '@/lib/env';
 import { callAnthropicCompletion, streamAnthropicMessages } from './anthropic';
+import { getNextAvailableKey, markKeyCooldown, markKeySuccess, getAllKeys } from './token-bucket';
 
 /**
  * LLM helper: prefer GROK (user-provided keys) with failover between keys,
@@ -27,11 +28,25 @@ function shouldUseMockGrokKey(key: string) {
   return isMockKey(key);
 }
 
+let grokRotationCursor = 0;
+
+function getRotatedGrokKeys(keys: string[]): string[] {
+  if (keys.length === 0) return [];
+  if (keys.length === 1) return keys;
+
+  const nextIndex = grokRotationCursor % keys.length;
+  grokRotationCursor = (grokRotationCursor + 1) % keys.length;
+
+  return [...keys.slice(nextIndex), ...keys.slice(0, nextIndex)];
+}
+
 async function tryGrok(prompt: string): Promise<string | null> {
   if (!env.GROK_API_KEYS) return null;
 
   const keys = env.GROK_API_KEYS.split(',').map((k) => k.trim()).filter(Boolean);
   if (keys.length === 0) return null;
+
+  const orderedKeys = getRotatedGrokKeys(keys);
 
   // Development: only use mock responses for placeholder/dummy keys.
   if (env.NODE_ENV !== 'production' && shouldUseMockGrokKey(keys[0])) {
@@ -42,7 +57,7 @@ async function tryGrok(prompt: string): Promise<string | null> {
   const base = env.GROK_API_BASE_URL ?? 'https://api.groq.com/openai';
   const url = `${base.replace(/\/$/, '')}/v1/chat/completions`;
 
-  for (const key of keys) {
+  for (const key of orderedKeys) {
     try {
       const res = await fetch(url, {
         method: 'POST',
@@ -190,38 +205,42 @@ async function* tryGrokStream(
   tools: any[],
   model: string,
   temperature: number,
-  maxTokens: number
+  maxTokens: number,
+  dynamicContext?: string
 ) {
-  if (!env.GROK_API_KEYS) return;
-
-  const keys = env.GROK_API_KEYS.split(',').map((k) => k.trim()).filter(Boolean);
-  if (keys.length === 0) return;
+  const allKeys = getAllKeys();
+  if (allKeys.length === 0) return;
 
   const base = env.GROK_API_BASE_URL ?? 'https://api.groq.com/openai';
   const url = `${base.replace(/\/$/, '')}/v1/chat/completions`;
 
-  // Map Anthropic tools to OpenAI format for Grok
   const openAiTools = tools.map((t) => ({
     type: 'function',
-    function: {
-      name: t.name,
-      description: t.description,
-      parameters: t.input_schema,
-    },
+    function: { name: t.name, description: t.description, parameters: t.input_schema },
   }));
 
-  const openAiMessages = [
-    { role: 'system', content: system },
-    ...convertAnthropicToOpenAi(messages),
-  ];
+  const systemMessages: any[] = [{ role: 'system', content: system }];
+  if (dynamicContext?.trim()) systemMessages.push({ role: 'system', content: dynamicContext.trim() });
 
-  // Use Groq's best available model (llama-3.3-70b-versatile)
+  const openAiMessages = [...systemMessages, ...convertAnthropicToOpenAi(messages)];
   const grokModel = 'llama-3.3-70b-versatile';
 
-  console.log(`[Grok] Starting stream: model=${grokModel}, tools=${tools.map(t => t.name).join(', ')||'none'}, messages=${messages.length}`);
-  for (const key of keys) {
+  console.log(`[Grok] Starting stream: model=${grokModel}, tools=${tools.map(t => t.name).join(', ')||'none'}`);
+
+  // v3.1.0 Token Bucket: try each key, skipping those in cooldown
+  for (let attempt = 0; attempt < allKeys.length; attempt++) {
+    const bucketKey = await getNextAvailableKey();
+    if (!bucketKey) {
+      console.warn('[TokenBucket] All Groq keys in cooldown');
+      throw new Error('All Groq keys are in cooldown');
+    }
+
+    const { key, index, masked } = bucketKey;
+    console.log(`[Grok] Trying key #${index} ${masked} at ${url}`);
+
+    yield { type: 'key_attempt' as const, keyMasked: masked, keyIndex: index, keyTotal: allKeys.length };
+
     try {
-      console.log(`[Grok] Trying key ...${key.slice(-6)} at ${url}`);
       const res = await fetch(url, {
         method: 'POST',
         headers: getGrokHeaders(key),
@@ -232,18 +251,25 @@ async function* tryGrokStream(
           temperature,
           max_tokens: maxTokens,
           stream: true,
+          stream_options: { include_usage: true },
         }),
       });
 
       if (!res.ok) {
         const txt = await res.text().catch(() => '<no body>');
-        console.warn(`[Grok] key failed status=${res.status} body=${txt}`);
+        console.warn(`[Grok] key #${index} ${masked} failed ${res.status}: ${txt.slice(0, 150)}`);
+        const errorType = res.status === 429 ? '429' : '5xx';
+        await markKeyCooldown(masked, errorType, `HTTP ${res.status}`);
+        yield { type: 'key_failed' as const, keyMasked: masked, keyIndex: index, status: res.status, rateLimit: res.status === 429 };
         continue;
       }
 
-      if (!res.body) continue;
+      if (!res.body) {
+        await markKeyCooldown(masked, 'empty', 'No response body');
+        continue;
+      }
 
-      const reader = res.body.getReader();
+      const reader  = res.body.getReader();
       const decoder = new TextDecoder();
       let buffer = '';
       let currentToolCall: { id: string; name: string; arguments: string } | null = null;
@@ -251,7 +277,6 @@ async function* tryGrokStream(
       while (true) {
         const { done, value } = await reader.read();
         if (done) break;
-
         buffer += decoder.decode(value, { stream: true });
         const lines = buffer.split('\n');
         buffer = lines.pop() || '';
@@ -259,69 +284,69 @@ async function* tryGrokStream(
         for (const line of lines) {
           const cleaned = line.trim();
           if (!cleaned || cleaned === 'data: [DONE]') continue;
-          if (cleaned.startsWith('data: ')) {
-            try {
-              const data = JSON.parse(cleaned.slice(6));
-              if (data.error) {
-                console.error('[Grok Stream Error]:', data.error);
-                continue;
-              }
-              const choice = data.choices?.[0];
-              if (!choice) continue;
-
-              const delta = choice.delta;
-              if (delta.content) {
-                yield { type: 'text' as const, text: delta.content };
-              }
-
-              if (delta.tool_calls && delta.tool_calls.length > 0) {
-                const tc = delta.tool_calls[0];
-                if (tc.function?.name) {
-                  if (currentToolCall) {
-                    try {
-                      const args = JSON.parse(currentToolCall.arguments);
-                      yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args };
-                    } catch {}
-                  }
-                  currentToolCall = {
-                    id: tc.id || `grok-tc-${Date.now()}`,
-                    name: tc.function.name,
-                    arguments: tc.function.arguments || '',
-                  };
-                } else if (tc.function?.arguments && currentToolCall) {
-                  currentToolCall.arguments += tc.function.arguments;
-                }
+          if (!cleaned.startsWith('data: ')) continue;
+          try {
+            const data = JSON.parse(cleaned.slice(6));
+            if (data.error) {
+              console.error('[Grok Stream Error]:', data.error);
+              
+              // tool_use_failed = model couldn't format tool call correctly
+              // Throw a non-retryable error — the orchestrator's final round
+              // (which uses no tools) will catch this and produce a plain-text response.
+              if (data.error?.code === 'tool_use_failed') {
+                console.warn('[Grok] tool_use_failed — retrying without tools (orchestrator will handle)');
+                await markKeySuccess(masked);
+                throw Object.assign(new Error('tool_use_failed'), { code: 'tool_use_failed', nonRetryable: false });
               }
 
-              if (choice.finish_reason === 'tool_calls' || (choice.finish_reason && currentToolCall)) {
-                if (currentToolCall) {
-                  try {
-                    const args = JSON.parse(currentToolCall.arguments);
-                    yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args };
-                  } catch (e) {
-                    console.error('[Grok] Failed to parse tool call args:', currentToolCall.arguments);
-                  }
-                  currentToolCall = null;
-                }
-              }
-            } catch {
-              // ignore parse errors
+              // Other errors (5xx, timeout) = retryable
+              await markKeyCooldown(masked, '5xx', String(data.error?.message ?? '').slice(0, 80));
+              continue;
             }
-          }
+            const choice = data.choices?.[0];
+            if (!choice) continue;
+            const delta = choice.delta;
+
+            if (delta?.content) yield { type: 'text' as const, text: delta.content };
+
+            if (data.usage?.prompt_tokens) {
+              yield { type: 'usage' as const, input_tokens: data.usage.prompt_tokens, output_tokens: data.usage.completion_tokens ?? 0 };
+            }
+
+            if (delta?.tool_calls?.length > 0) {
+              const tc = delta.tool_calls[0];
+              if (tc.function?.name) {
+                if (currentToolCall) {
+                  try { yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: JSON.parse(currentToolCall.arguments) }; } catch {}
+                }
+                currentToolCall = { id: tc.id || `grok-tc-${Date.now()}`, name: tc.function.name, arguments: tc.function.arguments || '' };
+              } else if (tc.function?.arguments && currentToolCall) {
+                currentToolCall.arguments += tc.function.arguments;
+              }
+            }
+
+            if ((choice.finish_reason === 'tool_calls' || (choice.finish_reason && currentToolCall)) && currentToolCall) {
+              try { yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: JSON.parse(currentToolCall.arguments) }; }
+              catch (e) { console.error('[Grok] Failed to parse tool call args:', currentToolCall.arguments); }
+              currentToolCall = null;
+            }
+          } catch { /* ignore parse errors */ }
         }
       }
 
       if (currentToolCall) {
-        try {
-          const args = JSON.parse(currentToolCall.arguments);
-          yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args };
-        } catch {}
+        try { yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: JSON.parse(currentToolCall.arguments) }; } catch {}
       }
 
-      return; // success, stop trying keys
-    } catch (err) {
-      console.warn('[Grok] request error', (err as Error).message);
-      continue;
+      await markKeySuccess(masked);
+      console.log(`[Grok] ✅ Key #${index} ${masked} succeeded`);
+      return;
+
+    } catch (err: any) {
+      const msg = String(err?.message ?? err);
+      console.warn(`[Grok] request error key #${index} ${masked}:`, msg);
+      await markKeyCooldown(masked, msg.includes('timeout') ? 'timeout' : '5xx', msg.slice(0, 80));
+      yield { type: 'key_failed' as const, keyMasked: masked, keyIndex: index, status: 0, rateLimit: false };
     }
   }
 
@@ -402,7 +427,7 @@ function formatFilterSummary(input: any): string {
   const typeParts: string[] = [];
   if (input.tType) typeParts.push(input.tType.toLowerCase());
   if (input.fType) typeParts.push(input.fType.toLowerCase());
-  if (input.seats) typeParts.push(`${input.seats}-seater`);
+  if (input.minSeats ?? input.seats) typeParts.push(`${input.minSeats ?? input.seats}-seater`);
   if (input.cType) {
     typeParts.push(input.cType.toUpperCase() + 's');
   } else {
@@ -411,39 +436,30 @@ function formatFilterSummary(input: any): string {
   parts.push(typeParts.join(' '));
 
   // 2. City
-  if (input.city) {
-    parts.push(`in ${input.city}`);
-  }
+  if (input.city) parts.push(`in ${input.city}`);
 
   // 3. Dates
   if (input.from) {
     try {
       const fromDate = new Date(input.from);
-      const toDate = input.to ? new Date(input.to) : null;
-      
+      const toDate   = input.to ? new Date(input.to) : null;
       const options: Intl.DateTimeFormatOptions = { month: 'short', day: 'numeric' };
-      const fromStr = fromDate.toLocaleDateString('en-US', options);
-      
+      const fromStr = fromDate.toLocaleDateString('en-AU', options);
       if (toDate) {
-        const toStr = toDate.toLocaleDateString('en-US', options);
-        if (fromDate.getMonth() === toDate.getMonth() && fromDate.getFullYear() === toDate.getFullYear()) {
-          const toDay = toDate.getDate();
-          parts.push(`for ${fromStr}-${toDay}`);
+        const toStr = toDate.toLocaleDateString('en-AU', options);
+        if (fromDate.getMonth() === toDate.getMonth()) {
+          parts.push(`for ${fromStr}–${toDate.getDate()}`);
         } else {
           parts.push(`from ${fromStr} to ${toStr}`);
         }
       } else {
         parts.push(`on ${fromStr}`);
       }
-    } catch {
-      // ignore date format errors
-    }
+    } catch { /* ignore */ }
   }
 
   // 4. Max Price
-  if (input.maxPrice) {
-    parts.push(`under $${input.maxPrice}/day`);
-  }
+  if (input.maxPrice) parts.push(`under $${input.maxPrice}/day`);
 
   return parts.join(' ');
 }
@@ -476,9 +492,31 @@ async function* generateToolAwareMock(
         // ── CASE A: Parse as vehicle search results ──────────────────────────
         try {
           const parsed = JSON.parse(content);
-          const vehicles = Array.isArray(parsed) ? parsed : parsed?.results;
-          if (Array.isArray(vehicles)) {
-            if (vehicles.length === 0) {
+
+          // v3.1.0 masked format: { total_matching, total_raw, shown: MaskedVehicle[] }
+          // Legacy format: TSearchedCar[] or { results: TSearchedCar[] }
+          const isMasked = parsed && typeof parsed === 'object' && !Array.isArray(parsed) && 'shown' in parsed;
+          const isLegacyArray = Array.isArray(parsed);
+          const isLegacyWrapped = parsed && typeof parsed === 'object' && Array.isArray(parsed?.results);
+
+          if (isMasked || isLegacyArray || isLegacyWrapped) {
+
+            // ── Normalise to a list of renderable vehicles ─────────────────
+            let renderList: any[] = [];
+            let totalMatching = 0;
+
+            if (isMasked) {
+              // v3.1.0: use shown[] directly — already masked
+              renderList    = parsed.shown ?? [];
+              totalMatching = parsed.total_matching ?? renderList.length;
+            } else {
+              // Legacy: raw TSearchedCar[]
+              const rawList = isLegacyArray ? parsed : parsed.results;
+              renderList    = rawList ?? [];
+              totalMatching = renderList.length;
+            }
+
+            if (renderList.length === 0) {
               const noResultsMsg = "I couldn't find any vehicles matching your criteria. Try adjusting your dates, location, or filtering rules.";
               const chunks = noResultsMsg.match(/.{1,16}/gs) || [noResultsMsg];
               for (const chunk of chunks) {
@@ -489,73 +527,72 @@ async function* generateToolAwareMock(
             }
 
             const tags: string[] = [];
-            const shownVehicles = vehicles.slice(0, 10);
-            
+            const shownVehicles = renderList.slice(0, 10);
+
             for (const v of shownVehicles) {
-              const id = v.listingId;
-              const make = v.car?.make ?? 'Unknown';
-              const model = v.car?.model ?? '';
-              const year = v.car?.year ?? 2022;
-              const dailyRate = v.rates?.dailyRates?.amount ?? 50;
-              const seats = v.car?.seats ?? 5;
-              const transmission = v.car?.transmissionType ?? 'Automatic';
-              const imageUrl = v.photos?.coverPhoto?.imageInfo?.secure_url ?? '';
-              
-              const vehicleJson = JSON.stringify({
-                id,
-                make,
-                model,
-                year,
-                dailyRate,
-                seats,
-                transmission,
-                imageUrl
-              });
-              tags.push(`[VEHICLE: ${vehicleJson}]`);
-            }
-            
-            let inputArgs: any = null;
-            const lastToolCall = messages.find(m => 
-              m.role === 'assistant' && Array.isArray(m.content) && 
-              m.content.some((c: any) => c.type === 'tool_use' && c.name === 'search_vehicles')
-            );
-            
-            if (lastToolCall) {
-              const toolUse = lastToolCall.content.find((c: any) => c.type === 'tool_use' && c.name === 'search_vehicles');
-              if (toolUse && toolUse.input) {
-                inputArgs = toolUse.input;
+              let id: number, make: string, model: string, dailyRate: number,
+                  seats: number, transmission: string, imageUrl: string;
+
+              if (isMasked) {
+                // v3.1.0 MaskedVehicle fields
+                const parts = (v.displayName ?? '').split(' ');
+                id           = v.listingId;
+                make         = parts[0] ?? 'Unknown';
+                model        = parts.slice(1).join(' ') || '';
+                dailyRate    = v.dailyRate ?? 0;
+                seats        = v.seats ?? 5;
+                transmission = v.transmission ?? 'Automatic';
+                imageUrl     = v.coverPhotoUrl ?? '';
+              } else {
+                // Legacy raw fields
+                id           = v.listingId;
+                make         = v.car?.make ?? 'Unknown';
+                model        = v.car?.model ?? '';
+                dailyRate    = v.rates?.dailyRates?.amount ?? 50;
+                seats        = v.car?.seats ?? 5;
+                transmission = v.car?.transmissionType ?? 'Automatic';
+                imageUrl     = v.photos?.coverPhoto?.imageInfo?.secure_url ?? '';
               }
+
+              tags.push(`[VEHICLE: ${JSON.stringify({ id, make, model, dailyRate, seats, transmission, imageUrl })}]`);
             }
 
-            if (vehicles.length > 10) {
-              const remaining = vehicles.length - 10;
-              let searchUrl = '/search';
-              
-              if (inputArgs) {
-                const queryParams = new URLSearchParams();
-                if (inputArgs.city) queryParams.set('city', inputArgs.city);
-                if (inputArgs.from) queryParams.set('from', inputArgs.from);
-                if (inputArgs.to) queryParams.set('to', inputArgs.to);
-                if (inputArgs.cType) queryParams.set('cType', inputArgs.cType);
-                if (inputArgs.tType) queryParams.set('tType', inputArgs.tType);
-                if (inputArgs.fType) queryParams.set('fType', inputArgs.fType);
-                if (inputArgs.seats) queryParams.set('seats', String(inputArgs.seats));
-                if (inputArgs.maxPrice) queryParams.set('maxPrice', String(inputArgs.maxPrice));
-                searchUrl = `/search?${queryParams.toString()}`;
-              }
-              
-              const viewMoreJson = JSON.stringify({
-                type: 'view_more',
-                remaining,
-                searchUrl
-              });
-              tags.push(`[VEHICLE: ${viewMoreJson}]`);
+            // Recover tool call input args for filter summary + View More URL
+            let inputArgs: any = null;
+            const lastToolCall = messages.find((m: any) =>
+              m.role === 'assistant' && Array.isArray(m.content) &&
+              m.content.some((c: any) => c.type === 'tool_use' && c.name === 'search_vehicles')
+            );
+            if (lastToolCall) {
+              const toolUse = lastToolCall.content.find(
+                (c: any) => c.type === 'tool_use' && c.name === 'search_vehicles'
+              );
+              if (toolUse?.input) inputArgs = toolUse.input;
             }
-            
+
+            // View More card when total_matching > 10
+            if (totalMatching > 10) {
+              const remaining = totalMatching - 10;
+              let searchUrl = '/search';
+              if (inputArgs) {
+                const qp = new URLSearchParams();
+                if (inputArgs.city)     qp.set('city',     inputArgs.city);
+                if (inputArgs.from)     qp.set('from',     inputArgs.from);
+                if (inputArgs.to)       qp.set('to',       inputArgs.to);
+                if (inputArgs.cType)    qp.set('cType',    inputArgs.cType);
+                if (inputArgs.tType)    qp.set('tType',    inputArgs.tType);
+                if (inputArgs.fType)    qp.set('fType',    inputArgs.fType);
+                if (inputArgs.minSeats) qp.set('seats',    String(inputArgs.minSeats));
+                if (inputArgs.maxPrice) qp.set('maxPrice', String(inputArgs.maxPrice));
+                searchUrl = `/search?${qp.toString()}`;
+              }
+              tags.push(`[VEHICLE: ${JSON.stringify({ type: 'view_more', remaining, searchUrl })}]`);
+            }
+
             const filterSummary = formatFilterSummary(inputArgs);
             const responseText = `Here are the available ${filterSummary} I found:\n\n` + tags.join(' ');
-            console.log(`[LLM Mock] Generating rich card response with ${shownVehicles.length} cards + ${vehicles.length > 10 ? 'View More' : 'none'}`);
-            
+            console.log(`[LLM Mock] Rich cards: ${shownVehicles.length} vehicles, total_matching=${totalMatching}`);
+
             const chunks = responseText.match(/.{1,16}/gs) || [responseText];
             for (const chunk of chunks) {
               yield { type: 'text' as const, text: chunk };
@@ -622,9 +659,49 @@ async function* generateToolAwareMock(
           // Not details JSON
         }
         
-        // ── CASE C: Summarise other tool results (e.g. vouchers, KB) ──────────
+        // ── CASE C: Knowledge base / vouchers / other tool results ──────────
         if (content && content !== 'null' && !content.includes('"error"')) {
-          const summary = `Here's the details:\n\n${content.slice(0, 800)}`;
+
+          // Strip the dedup cache system prefix if present
+          const stripped = content.replace(
+            /^\[System:.*?\]\n\n/s,
+            ''
+          ).trim();
+
+          // Detect KB/document content by looking for [AUTHORITATIVE] or [SOURCE:] tags
+          const isKBContent = stripped.includes('[AUTHORITATIVE') || stripped.includes('[SOURCE:');
+
+          if (isKBContent) {
+            // Extract the actual answer text — strip tags and format naturally
+            const cleaned = stripped
+              .replace(/\[AUTHORITATIVE — ADMIN OVERRIDE\]\n?/g, '')
+              .replace(/\[SOURCE:[^\]]+\]\n?/g, '')
+              .replace(/<!-- page:\d+ -->/g, '')
+              .trim();
+
+            // Get the original user question
+            const originalMsg = messages.find((m: any) => m.role === 'user')?.content ?? '';
+            const userQ = typeof originalMsg === 'string'
+              ? originalMsg
+              : (Array.isArray(originalMsg)
+                  ? originalMsg.find((c: any) => c.type === 'text')?.text ?? ''
+                  : '');
+
+            // Produce a natural, summarised answer — never dump raw document text
+            const response = cleaned.length > 0
+              ? `Based on Tashus policy:\n\n${cleaned.slice(0, 800)}${cleaned.length > 800 ? '\n\nFor full details, please review our complete rental terms.' : ''}`
+              : "I don't have that specific detail in our current documentation. I'd recommend contacting Tashus support directly for the most accurate answer.";
+
+            const chunks = response.match(/.{1,16}/gs) || [response];
+            for (const chunk of chunks) {
+              yield { type: 'text' as const, text: chunk };
+              await new Promise((resolve) => setTimeout(resolve, 8));
+            }
+            return;
+          }
+
+          // Voucher or other structured result — clean summary
+          const summary = stripped.slice(0, 800);
           const chunks = summary.match(/.{1,16}/gs) || [summary];
           for (const chunk of chunks) {
             yield { type: 'text' as const, text: chunk };
@@ -666,13 +743,32 @@ async function* generateToolAwareMock(
       return;
     }
 
+    // ── CASE 1b: Knowledge Base / Policy question — must come BEFORE vehicle search ──
+    // Any question about rules, policies, situations, or "what happens if" → KB lookup
+    const kbPattern = /\b(policy|rule|allow|permit|smoke|smoking|cancel|cancellation|insurance|excess|deposit|fee|age|limit|damage|accident|refund|penalty|lost|lose|stolen|theft|broke|broken|scratch|fine|charge|liable|liability|responsible|what (will|happens?|if|are|is)|how (does|do|can)|can i|is it|do you|does tashus|if i|document|agreement|term|condition|requirement|guideline|restriction|extend|late)\b/i;
+    if (kbPattern.test(text)) {
+      console.log(`[LLM Mock] Emitting tool_call: search_knowledge_base (policy/FAQ intent detected)`);
+      yield {
+        type: 'tool_call' as const,
+        id: `mock-tc-${Date.now()}`,
+        name: 'search_knowledge_base',
+        args: { query: text },
+      };
+      return;
+    }
+
     // ── CASE 2: Vehicle Search ───────────────────────────────────────────────
+    // Only trigger on explicit search/booking intent, NOT on policy questions about vehicles
     if (
-      text.includes('suv') || text.includes('car') || text.includes('vehicle') ||
-      text.includes('available') || text.includes('show me') || text.includes('find') ||
-      text.includes('book') || text.includes('sydney') || text.includes('melbourne') ||
-      text.includes('brisbane') || text.includes('perth') || text.includes('adelaide') ||
-      text.includes('ute') || text.includes('hatchback') || text.includes('sedan')
+      text.includes('suv') || text.includes('available') || text.includes('show me') ||
+      text.includes('find') || text.includes('book') || text.includes('sydney') ||
+      text.includes('melbourne') || text.includes('brisbane') || text.includes('perth') ||
+      text.includes('adelaide') || text.includes('ute') || text.includes('hatchback') ||
+      text.includes('sedan') ||
+      // "car" or "vehicle" only if it's a search intent (not a policy question)
+      ((text.includes('car') || text.includes('vehicle')) &&
+        (text.includes('need') || text.includes('rent') || text.includes('hire') ||
+         text.includes('get') || text.includes('want') || text.includes('looking for')))
     ) {
       const cityMatch = text.match(/\b(sydney|melbourne|brisbane|perth|adelaide|canberra|darwin|hobart)\b/i);
       const city = cityMatch ? cityMatch[1].charAt(0).toUpperCase() + cityMatch[1].slice(1) : 'Sydney';
@@ -781,9 +877,25 @@ async function* generateToolAwareMock(
  * Unified stream helper for both Grok and Anthropic.
  * Yields either text segments or structured tool calls.
  * Falls back to tool-aware mock if all real providers fail.
+ *
+ * v3.1.0 — Phase B.1.1: Prefix-cache optimisation
+ *  - `system` carries only the STATIC base prompt (byte-identical every request)
+ *  - `dynamicContext` carries datetime + RAG + summary (injected as a second
+ *    system message right before conversation history so it doesn't pollute
+ *    the cached prefix)
+ *  Groq automatically caches the first N tokens of the prompt when they are
+ *  identical across requests, giving a 50% token-cost discount on the static
+ *  portion (~1,450 tokens per turn).
+ *
+ * v3.1.0 — Phase D.2: LLM Fallback Chain
+ *  Groq → OpenRouter → Anthropic, with per-provider circuit breakers.
  */
+import { streamWithFallback } from './llm-providers/fallback-chain';
+import type { LLMCallParams } from './llm-providers/types';
+
 export async function* generateCompletionStream(params: {
   system: string;
+  dynamicContext?: string;   // NEW: datetime block + RAG context + summary
   messages: any[];
   tools: any[];
   model: string;
@@ -794,6 +906,13 @@ export async function* generateCompletionStream(params: {
   const isGrokMock = grokKeys.length === 0 || grokKeys.every(isMockKey);
   const isAnthropicMock = !env.ANTHROPIC_API_KEY || isMockKey(env.ANTHROPIC_API_KEY ?? '');
 
+  // Merge static + dynamic into one system string for providers that don't
+  // distinguish (Anthropic, mock). Groq gets them as two separate messages.
+  const combinedSystem = params.dynamicContext
+    ? `${params.system}\n\n${params.dynamicContext}`
+    : params.system;
+
+  // Mock mode — no real keys configured
   if (isGrokMock && isAnthropicMock) {
     console.log('[LLM] ⚠️  No real LLM keys configured — using tool-aware mock (tools WILL be called)');
     yield* generateToolAwareMock(params.messages, params.tools);
@@ -802,49 +921,35 @@ export async function* generateCompletionStream(params: {
 
   console.log(`[LLM] Using REAL LLM: grokMock=${isGrokMock}, anthropicMock=${isAnthropicMock}`);
 
-  if (env.GROK_API_KEYS && !isGrokMock) {
-    try {
-      console.log('[LLM] → Sending to Grok (real API call)');
-      for await (const chunk of tryGrokStream(
-        params.system,
-        params.messages,
-        params.tools,
-        params.model,
-        params.temperature,
-        params.maxTokens
-      )) {
-        yield chunk;
-      }
-      console.log('[LLM] ← Grok stream complete');
-      return;
-    } catch (e) {
-      console.warn('[LLM] Grok stream failed:', (e as Error).message);
-    }
-  }
+  // Build provider-specific stream functions to pass into the fallback chain
+  const llmParams: LLMCallParams = {
+    system:         params.system,
+    dynamicContext: params.dynamicContext,
+    messages:       params.messages,
+    tools:          params.tools,
+    model:          params.model,
+    temperature:    params.temperature,
+    maxTokens:      params.maxTokens,
+  };
 
-  if (!isAnthropicMock) {
-    try {
-      console.log('[LLM] → Sending to Anthropic (real API call)');
-      for await (const chunk of streamAnthropic(
-        params.system,
-        params.messages,
-        params.tools,
-        params.model,
-        params.temperature,
-        params.maxTokens
-      )) {
-        yield chunk;
-      }
-      console.log('[LLM] ← Anthropic stream complete');
-      return;
-    } catch (e) {
-      console.warn('[LLM] Anthropic stream failed:', (e as Error).message);
-    }
-  }
+  const groqFn = (!isGrokMock && env.GROK_API_KEYS)
+    ? (p: LLMCallParams) => tryGrokStream(p.system, p.messages, p.tools, p.model, p.temperature, p.maxTokens, p.dynamicContext)
+    : null;
 
-  // All real providers failed — fall back to tool-aware mock
-  console.warn('[LLM] ⚠️  All LLM providers failed — falling back to tool-aware mock');
-  yield* generateToolAwareMock(params.messages, params.tools);
+  const anthropicFn = !isAnthropicMock
+    ? (p: LLMCallParams) => streamAnthropic(combinedSystem, p.messages, p.tools, p.model, p.temperature, p.maxTokens)
+    : null;
+
+  try {
+    for await (const chunk of streamWithFallback(llmParams, groqFn, anthropicFn)) {
+      yield chunk;
+    }
+  } catch (err: any) {
+    console.error('[LLM] ⚠️  All real providers exhausted:', err.message);
+    // Last resort: tool-aware mock so the user gets some response
+    console.warn('[LLM] ⚠️  Falling back to tool-aware mock');
+    yield* generateToolAwareMock(params.messages, params.tools);
+  }
 }
 
 export default { generateCompletion, generateCompletionStream };

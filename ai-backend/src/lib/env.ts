@@ -47,11 +47,20 @@ const envSchema = z.object({
   // Must be distinct from any Tashus NEXTAUTH_SECRET value.
   JWT_SIGNING_SECRET_ADMIN: z.string().min(32),
 
+  // ── LLM Fallback (Phase D.2) ──────────────────────────────────────────────
+  // OpenRouter API key — optional; enables 3rd-provider fallback
+  OPENROUTER_API_KEY: z.string().optional(),
+
+  // ── Widget CORS ───────────────────────────────────────────────────────────
+  // Comma-separated list of origins allowed to load the widget.
+  // Examples:
+  //   Development:  http://localhost:3000,http://localhost:5173
+  //   Production:   https://tashus.com,https://www.tashus.com
+  // Use * to allow ALL origins (only for development / internal tools).
+  WIDGET_ALLOWED_ORIGINS: z.string().default('*'),
+
   // ── Observability (separate Sentry project from Tashus) ───────────────────
   SENTRY_DSN_AI: z.string().url().optional(),
-
-  // ── App ───────────────────────────────────────────────────────────────────
-  NEXT_PUBLIC_APP_URL: z.string().url().default('http://localhost:3001'),
 });
 
 // Ensure at least one LLM provider is configured
