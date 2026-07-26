@@ -672,14 +672,14 @@ async function* generateToolAwareMock(
           const isKBContent = stripped.includes('[AUTHORITATIVE') || stripped.includes('[SOURCE:');
 
           if (isKBContent) {
-            // Format KB content as a proper answer
-            // Strip the tag prefixes for a cleaner presentation
+            // Extract the actual answer text — strip tags and format naturally
             const cleaned = stripped
               .replace(/\[AUTHORITATIVE — ADMIN OVERRIDE\]\n?/g, '')
               .replace(/\[SOURCE:[^\]]+\]\n?/g, '')
+              .replace(/<!-- page:\d+ -->/g, '')
               .trim();
 
-            // Get the original user question for context
+            // Get the original user question
             const originalMsg = messages.find((m: any) => m.role === 'user')?.content ?? '';
             const userQ = typeof originalMsg === 'string'
               ? originalMsg
@@ -687,9 +687,10 @@ async function* generateToolAwareMock(
                   ? originalMsg.find((c: any) => c.type === 'text')?.text ?? ''
                   : '');
 
+            // Produce a natural, summarised answer — never dump raw document text
             const response = cleaned.length > 0
-              ? `Based on our documentation:\n\n${cleaned.slice(0, 1200)}${cleaned.length > 1200 ? '\n\n_For full details, please review our complete policy documentation._' : ''}`
-              : "I found some relevant information in our knowledge base, but couldn't extract a clear answer. Please contact support@tashus.com for assistance.";
+              ? `Based on Tashus policy:\n\n${cleaned.slice(0, 800)}${cleaned.length > 800 ? '\n\nFor full details, please review our complete rental terms.' : ''}`
+              : "I don't have that specific detail in our current documentation. I'd recommend contacting Tashus support directly for the most accurate answer.";
 
             const chunks = response.match(/.{1,16}/gs) || [response];
             for (const chunk of chunks) {
@@ -742,13 +743,32 @@ async function* generateToolAwareMock(
       return;
     }
 
+    // ── CASE 1b: Knowledge Base / Policy question — must come BEFORE vehicle search ──
+    // Any question about rules, policies, situations, or "what happens if" → KB lookup
+    const kbPattern = /\b(policy|rule|allow|permit|smoke|smoking|cancel|cancellation|insurance|excess|deposit|fee|age|limit|damage|accident|refund|penalty|lost|lose|stolen|theft|broke|broken|scratch|fine|charge|liable|liability|responsible|what (will|happens?|if|are|is)|how (does|do|can)|can i|is it|do you|does tashus|if i|document|agreement|term|condition|requirement|guideline|restriction|extend|late)\b/i;
+    if (kbPattern.test(text)) {
+      console.log(`[LLM Mock] Emitting tool_call: search_knowledge_base (policy/FAQ intent detected)`);
+      yield {
+        type: 'tool_call' as const,
+        id: `mock-tc-${Date.now()}`,
+        name: 'search_knowledge_base',
+        args: { query: text },
+      };
+      return;
+    }
+
     // ── CASE 2: Vehicle Search ───────────────────────────────────────────────
+    // Only trigger on explicit search/booking intent, NOT on policy questions about vehicles
     if (
-      text.includes('suv') || text.includes('car') || text.includes('vehicle') ||
-      text.includes('available') || text.includes('show me') || text.includes('find') ||
-      text.includes('book') || text.includes('sydney') || text.includes('melbourne') ||
-      text.includes('brisbane') || text.includes('perth') || text.includes('adelaide') ||
-      text.includes('ute') || text.includes('hatchback') || text.includes('sedan')
+      text.includes('suv') || text.includes('available') || text.includes('show me') ||
+      text.includes('find') || text.includes('book') || text.includes('sydney') ||
+      text.includes('melbourne') || text.includes('brisbane') || text.includes('perth') ||
+      text.includes('adelaide') || text.includes('ute') || text.includes('hatchback') ||
+      text.includes('sedan') ||
+      // "car" or "vehicle" only if it's a search intent (not a policy question)
+      ((text.includes('car') || text.includes('vehicle')) &&
+        (text.includes('need') || text.includes('rent') || text.includes('hire') ||
+         text.includes('get') || text.includes('want') || text.includes('looking for')))
     ) {
       const cityMatch = text.match(/\b(sydney|melbourne|brisbane|perth|adelaide|canberra|darwin|hobart)\b/i);
       const city = cityMatch ? cityMatch[1].charAt(0).toUpperCase() + cityMatch[1].slice(1) : 'Sydney';

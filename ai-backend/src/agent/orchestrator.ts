@@ -108,7 +108,7 @@ function intentNeedsRag(text: string): boolean {
 
   // Explicit policy / FAQ / support signals → always needs RAG
   const policyPattern =
-    /\b(policy|rule|allow|permit|smoke|smoking|cancel|cancellation|insurance|excess|deposit|fee|age|limit|service|operate|hour|document|agreement|term|condition|requirement|guideline|restriction|damage|accident|refund|penalty|late|extend|how does|how do|what is|what are|can i|is it|do you|does tashus)\b/i;
+    /\b(policy|rule|allow|permit|smoke|smoking|cancel|cancellation|insurance|excess|deposit|fee|age|limit|service|operate|hour|document|agreement|term|condition|requirement|guideline|restriction|damage|accident|refund|penalty|late|extend|how does|how do|what is|what are|what will|what happens|what happen|can i|is it|do you|does tashus|if i|if the|lost|lose|stolen|theft|broke|broken|scratch|fine|charge|cost|pay|liability|responsible)\b/i;
   if (policyPattern.test(t)) return true;
 
   // Default: run RAG for anything not clearly a vehicle search
