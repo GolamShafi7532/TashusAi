@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-
+import { apiFetch } from '@/lib/apiFetch';
 interface KeyStatus {
   index: number;
   masked: string;
@@ -29,7 +29,7 @@ export default function TokenBucketPage() {
   const refresh = useCallback(async () => {
     setLoading(true);
     try {
-      const res = await fetch('/api/admin/token-bucket');
+      const res = await apiFetch('/api/admin/token-bucket');
       if (res.ok) {
         setStatus(await res.json());
       }

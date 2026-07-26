@@ -1,7 +1,9 @@
 'use client';
+'use client';
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { apiFetch } from '@/lib/apiFetch';
 
 interface CannedResponse {
   id: string;
@@ -40,7 +42,7 @@ export default function CannedResponsesPage() {
 
   const fetchResponses = async () => {
     try {
-      const res = await fetch('/api/admin/canned-responses');
+      const res = await apiFetch('/api/admin/canned-responses');
       if (res.ok) {
         const data = await res.json();
         setResponses(data.responses ?? []);
@@ -107,14 +109,14 @@ export default function CannedResponsesPage() {
   const handleDelete = async (id: string) => {
     if (!confirm('Delete this canned response?')) return;
     try {
-      const res = await fetch(`/api/admin/canned-responses/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/admin/canned-responses/${id}`, { method: 'DELETE' });
       if (res.ok) fetchResponses();
     } catch {}
   };
 
   const handleToggleActive = async (response: CannedResponse) => {
     try {
-      const res = await fetch(`/api/admin/canned-responses/${response.id}`, {
+      const res = await apiFetch(`/api/admin/canned-responses/${response.id}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ is_active: !response.is_active }),

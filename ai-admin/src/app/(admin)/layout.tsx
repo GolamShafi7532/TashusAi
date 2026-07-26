@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect } from 'react';
 import Link from 'next/link';
+import { apiFetch } from '@/lib/apiFetch';
 import { usePathname, useRouter } from 'next/navigation';
 
 // v3.1.0: Token bucket cooldown alert component
@@ -13,7 +14,7 @@ function TokenCooldownAlert() {
   useEffect(() => {
     const fetch_ = async () => {
       try {
-        const res = await fetch('/api/admin/token-bucket');
+        const res = await apiFetch('/api/admin/token-bucket');
         if (res.ok) {
           const data = await res.json();
           setStatus(data);

@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useState, useEffect, useCallback } from 'react';
-
+import { apiFetch } from '@/lib/apiFetch';
 // ── Small reusable components ─────────────────────────────────────────────────
 
 function MetricCard({
@@ -187,7 +187,7 @@ export default function AnalyticsPage() {
   const fetchTokenUsage = useCallback(async () => {
     setTokenLoading(true);
     try {
-      const res = await fetch('/api/admin/analytics/token-usage?days=30&months=6');
+      const res = await apiFetch('/api/admin/analytics/token-usage?days=30&months=6');
       if (res.ok) {
         const data = await res.json();
         setTokenUsage(data);

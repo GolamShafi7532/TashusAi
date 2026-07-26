@@ -2,6 +2,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 
 export default function DocumentsPage() {
   const [documents, setDocuments] = useState<any[]>([]);
@@ -21,7 +22,7 @@ export default function DocumentsPage() {
     setLoading(true);
 
     try {
-      const res = await fetch('/api/admin/documents', {
+      const res = await apiFetch('/api/admin/documents', {
         method: 'GET',
         cache: 'no-store',
         credentials: 'same-origin',
@@ -79,7 +80,7 @@ export default function DocumentsPage() {
     formData.append('category', category);
 
     try {
-      const res = await fetch('/api/admin/documents', {
+      const res = await apiFetch('/api/admin/documents', {
         method: 'POST',
         body: formData,
       });
@@ -109,7 +110,7 @@ export default function DocumentsPage() {
 
   const handleReingest = async (docId: string) => {
     try {
-      const res = await fetch(`/api/admin/documents/${docId}/reingest`, { method: 'POST' });
+      const res = await apiFetch(`/api/admin/documents/${docId}/reingest`, { method: 'POST' });
       if (res.ok) fetchDocuments();
     } catch (err) {
       console.error('Re-ingest failed:', err);
@@ -119,7 +120,7 @@ export default function DocumentsPage() {
   const handleDelete = async (docId: string) => {
     if (!confirm('Are you sure you want to delete this document? All associated semantic search chunks will be permanently removed.')) return;
     try {
-      const res = await fetch(`/api/admin/documents/${docId}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/admin/documents/${docId}`, { method: 'DELETE' });
       if (res.ok) fetchDocuments();
     } catch (err) {
       console.error('Delete failed:', err);
@@ -128,12 +129,29 @@ export default function DocumentsPage() {
 
   const handlePreview = async (docId: string) => {
     try {
-      const res = await fetch(`/api/admin/documents/${docId}/preview`);
-      if (res.ok) {
-        const data = await res.json();
-        if (data.url) {
-          window.open(data.url, '_blank');
-        }
+      const res = await apiFetch(`/api/admin/documents/${docId}/preview`);
+      if (!res.ok) {
+        const err = await res.json().catch(() => ({}));
+        console.error('Preview failed:', err);
+        alert(err.error || 'Preview unavailable');
+        return;
+      }
+
+      // If the response is a PDF (proxy mode), create a blob URL
+      const contentType = res.headers.get('content-type') || '';
+      if (contentType.includes('application/pdf')) {
+        const blob = await res.blob();
+        const blobUrl = URL.createObjectURL(blob);
+        window.open(blobUrl, '_blank');
+        // Revoke after 60s to free memory
+        setTimeout(() => URL.revokeObjectURL(blobUrl), 60000);
+        return;
+      }
+
+      // Otherwise expect JSON with a url field
+      const data = await res.json();
+      if (data.url) {
+        window.open(data.url, '_blank');
       }
     } catch (err) {
       console.error('Preview failed:', err);

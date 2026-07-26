@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect, useRef } from 'react';
 import { useRouter } from 'next/navigation';
+import { apiFetch } from '@/lib/apiFetch';
 
 export default function SessionDetailPage({ params }: { params: { id: string } }) {
   const { id: sessionId } = params;
@@ -19,7 +20,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
   const fetchSessionDetails = async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
-      const res = await fetch(`/api/admin/sessions/${sessionId}`);
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}`);
       if (res.ok) {
         const data = await res.json();
         setSession(data.session);
@@ -51,7 +52,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
 
   const handleTakeover = async () => {
     try {
-      const res = await fetch(`/api/admin/sessions/${sessionId}/takeover`, { method: 'POST' });
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/takeover`, { method: 'POST' });
       if (res.ok) {
         fetchSessionDetails(false);
       }
@@ -62,7 +63,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
 
   const handleRelease = async () => {
     try {
-      const res = await fetch(`/api/admin/sessions/${sessionId}/release`, { method: 'POST' });
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/release`, { method: 'POST' });
       if (res.ok) {
         fetchSessionDetails(false);
       }
@@ -77,7 +78,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
 
     setSending(true);
     try {
-      const res = await fetch(`/api/admin/sessions/${sessionId}/messages`, {
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: composerText }),

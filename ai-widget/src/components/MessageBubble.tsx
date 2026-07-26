@@ -32,6 +32,171 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
     );
   }
 
+  /* ── Document → URL mapping ────────────────────────────────────── */
+  const DOC_URL_MAP: Record<string, string> = {
+    'tashus rental agreement': '/legals/rental-agreement',
+    'tashus privacy policy': '/legals/privacy',
+    'tashus support': '',          // KB-only — no link
+  };
+
+  function resolveDocUrl(document: string): string {
+    return DOC_URL_MAP[document.toLowerCase().trim()] ?? '';
+  }
+
+  /* ── Document → icon mapping ────────────────────────────────────── */
+  function resolveDocIcon(document: string): React.ReactNode {
+    const key = document.toLowerCase();
+    if (key.includes('privacy')) {
+      // Shield icon
+      return (
+        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M9 12.75L11.25 15 15 9.75m-3-7.036A11.959 11.959 0 013.598 6 11.955 11.955 0 003 10c0 5.592 3.824 10.29 9 11.622 5.176-1.332 9-6.03 9-11.622 0-1.31-.21-2.571-.598-3.751h-.152c-3.196 0-6.1-1.25-8.25-3.286z" />
+        </svg>
+      );
+    }
+    if (key.includes('rental') || key.includes('agreement')) {
+      // Document icon
+      return (
+        <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+          <path strokeLinecap="round" strokeLinejoin="round" d="M19.5 14.25v-2.625a3.375 3.375 0 00-3.375-3.375h-1.5A1.125 1.125 0 0113.5 7.125v-1.5a3.375 3.375 0 00-3.375-3.375H8.25m0 12.75h7.5m-7.5 3H12M10.5 2.25H5.625c-.621 0-1.125.504-1.125 1.125v17.25c0 .621.504 1.125 1.125 1.125h12.75c.621 0 1.125-.504 1.125-1.125V11.25a9 9 0 00-9-9z" />
+        </svg>
+      );
+    }
+    // Default: info circle for KB-only
+    return (
+      <svg width="15" height="15" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2}>
+        <path strokeLinecap="round" strokeLinejoin="round" d="M11.25 11.25l.041-.02a.75.75 0 011.063.852l-.708 2.836a.75.75 0 001.063.853l.041-.021M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-9-3.75h.008v.008H12V8.25z" />
+      </svg>
+    );
+  }
+
+  /* ── Source Card component ──────────────────────────────────────── */
+  const SourceCard = ({ document, section }: { document: string; section: string }) => {
+    const [hovered, setHovered] = React.useState(false);
+    const url = resolveDocUrl(document);
+    const hasLink = url.length > 0;
+
+    const cardStyle: React.CSSProperties = {
+      display: 'flex',
+      alignItems: 'center',
+      justifyContent: 'space-between',
+      gap: '10px',
+      marginTop: '10px',
+      padding: '9px 12px',
+      borderRadius: '10px',
+      background: hovered && hasLink
+        ? 'rgba(128,19,127,0.07)'
+        : 'rgba(128,19,127,0.04)',
+      border: '1px solid rgba(128,19,127,0.15)',
+      cursor: hasLink ? 'pointer' : 'default',
+      transition: 'background 0.15s, border-color 0.15s, transform 0.15s',
+      transform: hovered && hasLink ? 'translateY(-1px)' : 'none',
+      borderColor: hovered && hasLink
+        ? 'rgba(128,19,127,0.3)'
+        : 'rgba(128,19,127,0.15)',
+      textDecoration: 'none',
+      userSelect: 'none' as const,
+    };
+
+    const inner = (
+      <>
+        {/* Left: icon + text */}
+        <div style={{ display: 'flex', alignItems: 'center', gap: '9px', minWidth: 0 }}>
+          {/* Icon container */}
+          <div style={{
+            width: '28px',
+            height: '28px',
+            borderRadius: '7px',
+            background: 'linear-gradient(135deg, rgba(128,19,127,0.12) 0%, rgba(157,27,156,0.18) 100%)',
+            border: '1px solid rgba(128,19,127,0.18)',
+            display: 'flex',
+            alignItems: 'center',
+            justifyContent: 'center',
+            flexShrink: 0,
+            color: 'rgba(128,19,127,0.9)',
+          }}>
+            {resolveDocIcon(document)}
+          </div>
+
+          {/* Text stack */}
+          <div style={{ minWidth: 0 }}>
+            <div style={{
+              fontSize: '10px',
+              fontWeight: 600,
+              letterSpacing: '0.06em',
+              textTransform: 'uppercase' as const,
+              color: 'rgba(128,19,127,0.65)',
+              marginBottom: '2px',
+            }}>
+              Source
+            </div>
+            <div style={{
+              fontSize: '11px',
+              fontWeight: 600,
+              color: 'rgba(0,0,0,0.8)',
+              lineHeight: 1.3,
+              whiteSpace: 'nowrap' as const,
+              overflow: 'hidden',
+              textOverflow: 'ellipsis',
+            }}>
+              {document}
+            </div>
+            {section && section !== 'Official Policy' && (
+              <div style={{
+                fontSize: '10px',
+                color: 'rgba(0,0,0,0.45)',
+                fontWeight: 500,
+                marginTop: '1px',
+                whiteSpace: 'nowrap' as const,
+                overflow: 'hidden',
+                textOverflow: 'ellipsis',
+              }}>
+                {section}
+              </div>
+            )}
+          </div>
+        </div>
+
+        {/* Right: arrow (only when there's a link) */}
+        {hasLink && (
+          <div style={{
+            flexShrink: 0,
+            color: hovered ? 'rgba(128,19,127,0.9)' : 'rgba(128,19,127,0.4)',
+            transition: 'color 0.15s, transform 0.15s',
+            transform: hovered ? 'translateX(2px)' : 'none',
+          }}>
+            <svg width="13" height="13" fill="none" viewBox="0 0 24 24" stroke="currentColor" strokeWidth={2.5}>
+              <path strokeLinecap="round" strokeLinejoin="round" d="M13.5 6H5.25A2.25 2.25 0 003 8.25v10.5A2.25 2.25 0 005.25 21h10.5A2.25 2.25 0 0018 18.75V10.5m-10.5 6L21 3m0 0h-5.25M21 3v5.25" />
+            </svg>
+          </div>
+        )}
+      </>
+    );
+
+    if (hasLink) {
+      return (
+        <div
+          style={cardStyle}
+          onMouseEnter={() => setHovered(true)}
+          onMouseLeave={() => setHovered(false)}
+          onClick={() => { window.parent.location.href = url; }}
+          role="link"
+          tabIndex={0}
+          onKeyDown={(e) => { if (e.key === 'Enter' || e.key === ' ') window.parent.location.href = url; }}
+          aria-label={`View ${document}${section ? ` — ${section}` : ''}`}
+        >
+          {inner}
+        </div>
+      );
+    }
+
+    return (
+      <div style={cardStyle}>
+        {inner}
+      </div>
+    );
+  };
+
   /* ── CTA Button renderer ────────────────────────────────────────── */
   const CtaButton = ({ label, url }: { label: string; url: string }) => {
     const [btnHovered, setBtnHovered] = React.useState(false);
@@ -83,7 +248,7 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
       (_full, label, url) => `[CTA: {"label": "${label.replace(/→/g, '').trim()}", "url": "${url}"}]`
     );
 
-    const regex = /\[(VEHICLE|VOUCHER|CTA):\s*(\{.*?\})\]/gs;
+    const regex = /\[(VEHICLE|VOUCHER|CTA|SOURCE_CARD):\s*(\{.*?\})\]/gs;
     const parts: { type: string; val: any }[] = [];
     let lastIndex = 0;
     let match;
@@ -93,7 +258,7 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
         parts.push({ type: 'text', val: processedText.substring(lastIndex, match.index) });
       }
       try {
-        parts.push({ type: match[1].toLowerCase(), val: JSON.parse(match[2]) });
+        parts.push({ type: match[1].toLowerCase().replace('_card', '_card'), val: JSON.parse(match[2]) });
       } catch {
         parts.push({ type: 'text', val: match[0] });
       }
@@ -171,6 +336,15 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
           }
           if (p.type === 'cta') {
             return <CtaButton key={i} label={p.val.label} url={p.val.url} />;
+          }
+          if (p.type === 'source_card') {
+            return (
+              <SourceCard
+                key={i}
+                document={p.val.document ?? 'Tashus Support'}
+                section={p.val.section ?? ''}
+              />
+            );
           }
           return null;
         })}

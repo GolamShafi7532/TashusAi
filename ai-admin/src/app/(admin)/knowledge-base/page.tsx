@@ -2,7 +2,7 @@
 'use client';
 
 import React, { useState, useEffect } from 'react';
-
+import { apiFetch } from '@/lib/apiFetch';
 export default function KnowledgeBasePage() {
   const [entries, setEntries] = useState<any[]>([]);
   const [loading, setLoading] = useState(true);
@@ -28,7 +28,7 @@ export default function KnowledgeBasePage() {
     try {
       const query = new URLSearchParams();
       if (typeFilter) query.set('type', typeFilter);
-      const res = await fetch(`/api/admin/kb?${query.toString()}`);
+      const res = await apiFetch(`/api/admin/kb?${query.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setEntries(data.entries || []);
@@ -121,7 +121,7 @@ export default function KnowledgeBasePage() {
   const handleDelete = async (id: string) => {
     if (!confirm('Are you sure you want to deactivate this KB entry?')) return;
     try {
-      const res = await fetch(`/api/admin/kb/${id}`, { method: 'DELETE' });
+      const res = await apiFetch(`/api/admin/kb/${id}`, { method: 'DELETE' });
       if (res.ok) fetchEntries();
     } catch (err) {
       console.error('Delete failed:', err);

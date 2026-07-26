@@ -1,6 +1,7 @@
 'use client';
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -64,7 +65,7 @@ export default function SessionsPage() {
       const params = new URLSearchParams();
       if (activeTab === 'handoff') params.set('handoff', 'true');
 
-      const res = await fetch(`/api/admin/sessions?${params.toString()}`);
+      const res = await apiFetch(`/api/admin/sessions?${params.toString()}`);
       if (res.ok) {
         const data = await res.json();
         setSessions(data.sessions || []);
@@ -308,7 +309,7 @@ function InlineChatPanel({ sessionId, onClose, onUpdate }: {
   // ── Fetch session detail ───────────────────────────────────────────────────
   const fetchDetail = useCallback(async () => {
     try {
-      const res = await fetch(`/api/admin/sessions/${sessionId}`);
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}`);
       if (res.ok) {
         const data = await res.json();
         setDetail(data);
@@ -333,7 +334,7 @@ function InlineChatPanel({ sessionId, onClose, onUpdate }: {
   // ── Actions ────────────────────────────────────────────────────────────────
   const handleTakeover = async () => {
     try {
-      const res = await fetch(`/api/admin/sessions/${sessionId}/takeover`, { method: 'POST' });
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/takeover`, { method: 'POST' });
       if (res.ok) {
         await fetchDetail();
         onUpdate();
@@ -345,7 +346,7 @@ function InlineChatPanel({ sessionId, onClose, onUpdate }: {
 
   const handleRelease = async () => {
     try {
-      const res = await fetch(`/api/admin/sessions/${sessionId}/release`, { method: 'POST' });
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/release`, { method: 'POST' });
       if (res.ok) {
         await fetchDetail();
         onUpdate();
@@ -357,7 +358,7 @@ function InlineChatPanel({ sessionId, onClose, onUpdate }: {
 
   const handleClose = async () => {
     try {
-      await fetch(`/api/admin/sessions/${sessionId}`, {
+      await apiFetch(`/api/admin/sessions/${sessionId}`, {
         method: 'PATCH',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ status: 'closed' }),
@@ -373,7 +374,7 @@ function InlineChatPanel({ sessionId, onClose, onUpdate }: {
     if (!composerText.trim() || sending) return;
     setSending(true);
     try {
-      const res = await fetch(`/api/admin/sessions/${sessionId}/messages`, {
+      const res = await apiFetch(`/api/admin/sessions/${sessionId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ content: composerText.trim() }),

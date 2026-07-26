@@ -1,6 +1,8 @@
 'use client';
+'use client';
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
+import { apiFetch } from '@/lib/apiFetch';
 
 // Simple UUID generator without external dependency
 const generateId = () => {
@@ -146,7 +148,7 @@ function ProviderStatusPanel({ backendUrl }: { backendUrl: string }) {
     setLoading(true);
     try {
       // Use relative URL — goes through Next.js rewrite proxy, no CORS issue
-      const res = await fetch('/api/ai/test/provider-status');
+      const res = await apiFetch('/api/ai/test/provider-status');
       if (res.ok) {
         setData(await res.json());
         setLastRefresh(new Date());
@@ -488,7 +490,7 @@ export default function TestChatPage() {
   useEffect(() => {
     const fetchKeyStatus = async () => {
       try {
-        const res = await fetch('/api/admin/token-bucket');
+        const res = await apiFetch('/api/admin/token-bucket');
         if (res.ok) {
           const data = await res.json();
           setLiveKeyStatus(data);
