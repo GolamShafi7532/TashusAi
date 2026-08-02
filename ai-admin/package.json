@@ -10,7 +10,7 @@
   },
   "dependencies": {
     "@supabase/supabase-js": "^2.110.3",
-    "argon2": "^0.44.0",
+    "bcryptjs": "^3.0.3",
     "bullmq": "^5.80.2",
     "ioredis": "^5.11.1",
     "jose": "^6.2.3",
@@ -22,6 +22,7 @@
     "zod": "^4.4.3"
   },
   "devDependencies": {
+    "@types/bcryptjs": "^2.4.6",
     "@types/node": "^20",
     "@types/react": "^18",
     "@types/react-dom": "^18",

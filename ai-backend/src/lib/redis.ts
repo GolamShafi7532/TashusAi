@@ -136,4 +136,6 @@ export function getTtlSeconds(template: string): number {
 }
 
 // ── Convenience re-export ───────────────────────────────────────────────────
+// Eager singleton — safe because lazyConnect:true means no TCP connection is
+// made at import time in serverless. The connection only opens on first command.
 export const redis = getRedisClient();
