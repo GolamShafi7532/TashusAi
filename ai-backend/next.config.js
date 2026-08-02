@@ -1,10 +1,6 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
   // Keep native-module / heavy server packages out of the browser bundle.
-  // pdf-parse uses require('fs'), ioredis/bullmq have Node-only internals.
-  // argon2 has native C++ bindings — will never work in the browser.
-  // NOTE: In Next.js 14 this lives under `experimental`. It moves to the
-  //       top-level `serverExternalPackages` key in Next.js 15.
   experimental: {
     serverComponentsExternalPackages: ['pdf-parse', 'ioredis', 'bullmq', 'argon2', 'nodemailer'],
   },
@@ -15,6 +11,16 @@ const nextConfig = {
       { protocol: 'https', hostname: 'res.cloudinary.com' },
       { protocol: 'https', hostname: '*.supabase.co' },
     ],
+  },
+
+  // Suppress env validation errors during the build phase.
+  // All actual validation happens at runtime when real values are injected.
+  // This prevents "Failed to collect page data" errors on Vercel builds where
+  // env vars are not present during static analysis.
+  env: {
+    // These are read at build time only to prevent validation crash.
+    // Real values come from Vercel Environment Variables at runtime.
+    NEXT_PHASE: process.env.NEXT_PHASE,
   },
 };
 

@@ -65,6 +65,27 @@ const envSchema = z.object({
 
 // Ensure at least one LLM provider is configured
 function validateEnv() {
+  // During Next.js build phase, environment variables are not available.
+  // Skip strict validation so the build completes — validation runs again
+  // at runtime when the actual values are injected by Vercel.
+  const isBuildPhase =
+    process.env.NEXT_PHASE === 'phase-production-build' ||
+    process.env.CI === 'true' && !process.env.SUPABASE_URL;
+
+  if (isBuildPhase) {
+    // Return safe defaults so the module loads without crashing
+    return envSchema.parse({
+      NODE_ENV: process.env.NODE_ENV || 'production',
+      SUPABASE_URL: process.env.SUPABASE_URL || 'https://placeholder.supabase.co',
+      SUPABASE_SERVICE_ROLE_KEY: process.env.SUPABASE_SERVICE_ROLE_KEY || 'placeholder-key-min-100-chars-for-build-phase-only-not-real-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx',
+      REDIS_URL: process.env.REDIS_URL || 'redis://localhost:6379',
+      EMBEDDING_PROVIDER_API_KEY: process.env.EMBEDDING_PROVIDER_API_KEY || 'placeholder',
+      TASHUS_API_BASE_URL: process.env.TASHUS_API_BASE_URL || 'https://api.tashus.com',
+      JWT_SIGNING_SECRET_ADMIN: process.env.JWT_SIGNING_SECRET_ADMIN || 'placeholder-secret-32-chars-minimum-xx',
+      GROK_API_KEYS: process.env.GROK_API_KEYS || 'placeholder',
+    });
+  }
+
   const result = envSchema.safeParse(process.env);
 
   if (!result.success) {

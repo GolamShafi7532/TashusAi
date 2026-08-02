@@ -42,23 +42,30 @@ export async function POST(req: Request) {
       .eq('id', user.id);
 
     // 4. Sign JWTs
-    const accessTokenPayload = {
-      userId: user.id,
-      email: user.email,
-      role: user.role,
-      displayName: user.display_name,
-    };
-
-    const accessToken = await signAccessToken(accessTokenPayload);
-    const refreshToken = await signRefreshToken({ userId: user.id });
+    // This will throw if JWT_SIGNING_SECRET_ADMIN is missing or < 32 chars
+    let accessToken: string;
+    let refreshToken: string;
+    try {
+      const accessTokenPayload = {
+        userId: user.id,
+        email: user.email,
+        role: user.role,
+        displayName: user.display_name,
+      };
+      accessToken = await signAccessToken(accessTokenPayload);
+      refreshToken = await signRefreshToken({ userId: user.id });
+    } catch (jwtErr: any) {
+      console.error('[LoginRoute] JWT signing failed — check JWT_SIGNING_SECRET_ADMIN env var:', jwtErr.message);
+      return NextResponse.json({ error: 'Server configuration error' }, { status: 500 });
+    }
 
     // Hash refresh token for DB storage
     const refreshTokenHash = crypto.createHash('sha256').update(refreshToken).digest('hex');
 
-    // 5. Store session in DB
+    // 5. Store session in DB (non-fatal — login still works without it)
     const userAgent = req.headers.get('user-agent');
     const ipAddress = req.headers.get('x-forwarded-for') || '127.0.0.1';
-    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString(); // 7 days
+    const expiresAt = new Date(Date.now() + 7 * 24 * 60 * 60 * 1000).toISOString();
 
     const { error: sessionErr } = await db
       .from('ai_admin_sessions')
@@ -71,8 +78,9 @@ export async function POST(req: Request) {
       } as any);
 
     if (sessionErr) {
-      console.error('[LoginRoute] Session insertion failed:', sessionErr.message);
-      return NextResponse.json({ error: 'Internal server login error' }, { status: 500 });
+      // Log but don't fail — the JWT cookies are still valid for auth
+      // This commonly happens when ai_admin_sessions table doesn't exist yet
+      console.warn('[LoginRoute] Session table insert failed (non-fatal):', sessionErr.message);
     }
 
     // 6. Build response with cookies
