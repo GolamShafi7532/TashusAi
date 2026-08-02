@@ -2,7 +2,7 @@
 const nextConfig = {
   // Keep native-module / heavy server packages out of the browser bundle.
   experimental: {
-    serverComponentsExternalPackages: ['pdf-parse', 'ioredis', 'bullmq', 'argon2'],
+    serverComponentsExternalPackages: ['pdf-parse', 'ioredis', 'bullmq', 'argon2', 'nodemailer'],
   },
 
   // Allow images from Cloudinary and Supabase storage used by vehicle cards
