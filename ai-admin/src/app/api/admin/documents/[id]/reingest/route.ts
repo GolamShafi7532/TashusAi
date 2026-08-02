@@ -53,7 +53,7 @@ export async function POST(
     }
 
     // 4. Trigger inline ingestion on the backend
-    const backendUrl = process.env.NEXT_PUBLIC_AI_BACKEND_URL || 'http://localhost:3001';
+    const backendUrl = process.env.AI_BACKEND_URL || process.env.NEXT_PUBLIC_AI_BACKEND_URL || 'http://localhost:3001';
     try {
       const ingestRes = await fetch(`${backendUrl}/api/ai/ingest`, {
         method: 'POST',

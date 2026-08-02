@@ -1,4 +1,4 @@
-import * as argon2 from 'argon2';
+import bcrypt from 'bcryptjs';
 import * as jose from 'jose';
 import { env } from './env';
 
@@ -7,23 +7,20 @@ const ACCESS_TOKEN_EXPIRY = '15m';
 const REFRESH_TOKEN_EXPIRY = '7d';
 
 /**
- * Hash a password using argon2.
+ * Hash a password using bcryptjs (pure JS — works in all serverless environments).
  */
 export async function hashPassword(password: string): Promise<string> {
-  return await argon2.hash(password, {
-    type: argon2.argon2id,
-    memoryCost: 2 ** 16, // 64MB
-    timeCost: 3,
-    parallelism: 4,
-  });
+  return await bcrypt.hash(password, 12);
 }
 
 /**
- * Verify a password against an argon2 hash.
+ * Verify a password against a bcrypt hash.
+ * Also accepts legacy argon2 hashes — returns false gracefully so admins
+ * can update their password via the reset flow.
  */
 export async function verifyPassword(password: string, hash: string): Promise<boolean> {
   try {
-    return await argon2.verify(hash, password);
+    return await bcrypt.compare(password, hash);
   } catch (err) {
     console.error('[Auth] Password verification failed:', err);
     return false;

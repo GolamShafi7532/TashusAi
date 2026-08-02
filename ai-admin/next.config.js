@@ -3,7 +3,7 @@ const nextConfig = {
   // Keep native-module packages server-side only — never bundled into the browser.
   // argon2 uses native bindings; bullmq/ioredis must not appear in client bundles.
   experimental: {
-    serverComponentsExternalPackages: ['argon2', 'bullmq', 'ioredis'],
+    serverComponentsExternalPackages: ['bullmq', 'ioredis'],
   },
 
   // Allow images from Cloudinary (vehicle photos) and Supabase storage

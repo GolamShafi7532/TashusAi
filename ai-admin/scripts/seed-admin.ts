@@ -1,5 +1,5 @@
 import { createClient } from '@supabase/supabase-js';
-import * as argon2 from 'argon2';
+import bcrypt from 'bcryptjs';
 import * as dotenv from 'dotenv';
 import * as path from 'path';
 
@@ -23,13 +23,8 @@ async function main() {
 
   console.log(`Seeding admin user: ${email}...`);
 
-  // Hash password using argon2id matching lib/auth.ts setup
-  const passwordHash = await argon2.hash(password, {
-    type: argon2.argon2id,
-    memoryCost: 2 ** 16,
-    timeCost: 3,
-    parallelism: 4,
-  });
+  // Hash password with bcryptjs — works in all environments including Vercel serverless
+  const passwordHash = await bcrypt.hash(password, 12);
 
   const { data, error } = await supabase
     .from('ai_admin_users')
@@ -49,6 +44,9 @@ async function main() {
   }
 
   console.log('✅ Admin user seeded successfully:', data);
+  console.log('\nLogin credentials:');
+  console.log('  Email:   ', email);
+  console.log('  Password:', password);
 }
 
 main().catch((err) => {
