@@ -1,0 +1,16 @@
+{
+  "functions": {
+    "src/app/api/ai/chat/stream/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/ai/session/[id]/stream/route.ts": {
+      "maxDuration": 300
+    },
+    "src/app/api/ai/ingest/route.ts": {
+      "maxDuration": 120
+    },
+    "src/app/api/admin/notifications/stream/route.ts": {
+      "maxDuration": 300
+    }
+  }
+}

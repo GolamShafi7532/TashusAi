@@ -1,10 +1,23 @@
 /**
  * Redis client singleton using ioredis.
+ *
  * Used for:
  *   - Tashus adapter response cache (namespace: tashus-cache:*)
  *   - BullMQ job queues (namespace: bull:*)
  *   - Session circuit-breaker pub/sub (channel: session:{id}:control)
  *   - Rate limiting token buckets (namespace: ratelimit:*)
+ *
+ * ── Deployment notes ──────────────────────────────────────────────────────
+ * Vercel (serverless):
+ *   - Each function invocation gets a fresh Node.js process — connections are
+ *     reused within a single cold-start but NOT across invocations.
+ *   - maxRetriesPerRequest must be a number (not null) so ioredis doesn't hang
+ *     a Vercel function waiting for an unreachable Redis.
+ *   - Upstash requires TLS: use rediss:// (double-s) in REDIS_URL.
+ *
+ * Koyeb worker (long-running process):
+ *   - BullMQ requires maxRetriesPerRequest: null — set automatically when
+ *     WORKER_PROCESS=true env var is present (set in Dockerfile.worker CMD).
  *
  * Source of truth: AI Chatbot blueprint.md §3.2 (caching) & §4.1 (pub/sub)
  */
@@ -14,30 +27,40 @@ import { env } from '@/lib/env';
 let _redis: Redis | null = null;
 let _subscriber: Redis | null = null;
 
+/** True when running inside the dedicated BullMQ worker process on Koyeb. */
+const IS_WORKER = process.env.WORKER_PROCESS === 'true';
+
 /**
  * Main Redis client — used for get/set/publish and BullMQ connection.
- * ioredis automatically reconnects on disconnect.
+ *
+ * maxRetriesPerRequest behaviour:
+ *   - Worker (BullMQ): null  — BullMQ requirement; lets it retry indefinitely
+ *   - Serverless (Vercel): 1 — fail fast so the function doesn't hang
  */
 export function getRedisClient(): Redis {
   if (_redis) return _redis;
 
   _redis = new Redis(env.REDIS_URL, {
-    maxRetriesPerRequest: null, // required by BullMQ
+    // BullMQ requires null; serverless needs a number to avoid hanging functions
+    maxRetriesPerRequest: IS_WORKER ? null : 1,
     enableReadyCheck: false,
-    lazyConnect: false,
+    // Lazy-connect in serverless — don't block module init waiting for TCP
+    lazyConnect: IS_WORKER ? false : true,
     retryStrategy(times) {
-      // Exponential backoff: 100ms, 200ms, 400ms … capped at 5s
+      if (!IS_WORKER && times > 2) return null; // give up fast in serverless
       return Math.min(100 * 2 ** times, 5000);
     },
     reconnectOnError(err) {
-      // Reconnect on ECONNRESET and ETIMEDOUT
       const targetErrors = ['ECONNRESET', 'ETIMEDOUT'];
-      if (targetErrors.some((e) => err.message.includes(e))) return true;
-      return false;
+      return targetErrors.some((e) => err.message.includes(e));
     },
+    // Upstash requires TLS — tolerate self-signed certs in local dev
+    tls: env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
   });
 
   _redis.on('error', (err) => {
+    // Suppress noisy "connect ECONNREFUSED" in dev if Redis isn't running
+    if (env.NODE_ENV === 'development' && err.message.includes('ECONNREFUSED')) return;
     console.error('[Redis] Connection error:', err.message);
   });
 
@@ -52,33 +75,33 @@ export function getRedisClient(): Redis {
 
 /**
  * Dedicated subscriber client for Redis pub/sub.
- * A client in subscribe mode cannot issue regular commands,
- * so we need a separate instance.
- * Used by the SSE handler (blueprint §4.1) to listen on
- * session:{id}:control channels for circuit-breaker signals.
+ * A client in subscribe mode cannot issue regular commands.
+ * Used by the SSE handler (blueprint §4.1) to listen on session:{id}:control.
  */
 export function getRedisSubscriber(): Redis {
   if (_subscriber) return _subscriber;
 
   _subscriber = new Redis(env.REDIS_URL, {
-    maxRetriesPerRequest: null,
+    maxRetriesPerRequest: IS_WORKER ? null : 1,
     enableReadyCheck: false,
-    lazyConnect: false,
+    lazyConnect: IS_WORKER ? false : true,
     retryStrategy(times) {
+      if (!IS_WORKER && times > 2) return null;
       return Math.min(100 * 2 ** times, 5000);
     },
+    tls: env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
   });
 
   _subscriber.on('error', (err) => {
+    if (env.NODE_ENV === 'development' && err.message.includes('ECONNREFUSED')) return;
     console.error('[Redis Subscriber] Error:', err.message);
   });
 
   return _subscriber;
 }
 
-// ── Cache key builders ─────────────────────────────────────────────────────────
+// ── Cache key builders ──────────────────────────────────────────────────────
 
-/** Namespaced cache key for Tashus adapter responses */
 export function buildTashusCacheKey(
   template: string,
   params?: Record<string, string | number>
@@ -89,19 +112,16 @@ export function buildTashusCacheKey(
   return `tashus-cache:${template}:${JSON.stringify(sortedParams)}`;
 }
 
-/** Rate limit key per visitor */
 export function buildRateLimitKey(visitorId: string): string {
   return `ratelimit:${visitorId}`;
 }
 
-/** Circuit-breaker pub/sub channel name for a session */
 export function buildSessionControlChannel(sessionId: string): string {
   return `session:${sessionId}:control`;
 }
 
-// ── TTL map for Tashus adapter cache (blueprint §3.2) ──────────────────────────
+// ── TTL map for Tashus adapter cache (blueprint §3.2) ──────────────────────
 
-/** TTLs in seconds, tuned per endpoint volatility */
 export const TASHUS_CACHE_TTL: Record<string, number> = {
   '/search/find-cars': 60,
   '/search/find-cars/:listingId': 90,
@@ -115,5 +135,5 @@ export function getTtlSeconds(template: string): number {
   return TASHUS_CACHE_TTL[template] ?? 60;
 }
 
-// ── Convenience re-export ──────────────────────────────────────────────────────
+// ── Convenience re-export ───────────────────────────────────────────────────
 export const redis = getRedisClient();

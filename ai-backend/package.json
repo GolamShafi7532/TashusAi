@@ -5,6 +5,8 @@
   "scripts": {
     "dev": "next dev --port 3001",
     "build": "next build",
+    "build:widget": "cd ../ai-widget && npm ci && npm run build",
+    "build:all": "npm run build:widget && next build",
     "start": "next start --port 3001",
     "lint": "next lint",
     "type-check": "tsc --noEmit",
