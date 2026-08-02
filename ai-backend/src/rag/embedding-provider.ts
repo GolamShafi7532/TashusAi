@@ -235,8 +235,15 @@ export function getEmbeddingProvider(): EmbeddingProvider {
     key.includes('placeholder') ||
     key.length < 20;
 
-  if (isDummyKey && env.NODE_ENV !== 'production') {
-    console.log('[EmbeddingProvider] Using MOCK embeddings for development (dummy/missing API key detected)');
+  // Use mock embeddings when no real key is configured — regardless of NODE_ENV.
+  // A dummy key in production is worse than mock: it wastes 7+ seconds on failed
+  // API retries before falling back to slow keyword search.
+  if (isDummyKey) {
+    if (env.NODE_ENV !== 'production') {
+      console.log('[EmbeddingProvider] Using MOCK embeddings (dummy/missing API key detected)');
+    } else {
+      console.warn('[EmbeddingProvider] ⚠️  Using MOCK embeddings in production — set a real EMBEDDING_PROVIDER_API_KEY for semantic search');
+    }
     _provider = new MockEmbeddingProvider();
     return _provider;
   }
