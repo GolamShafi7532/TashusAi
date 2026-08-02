@@ -68,4 +68,5 @@ export async function* streamAnthropicMessages(params: {
   }
 }
 
-export default { callAnthropicCompletion, streamAnthropicMessages };
+const anthropicClient = { callAnthropicCompletion, streamAnthropicMessages };
+export default anthropicClient;

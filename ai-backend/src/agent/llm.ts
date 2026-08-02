@@ -952,5 +952,6 @@ export async function* generateCompletionStream(params: {
   }
 }
 
-export default { generateCompletion, generateCompletionStream };
+const llmClient = { generateCompletion, generateCompletionStream };
+export default llmClient;
 
