@@ -82,7 +82,13 @@ async function checkDatabase(): Promise<ServiceStatus> {
 async function checkRedis(): Promise<ServiceStatus> {
   const start = Date.now();
   try {
-    const pong = await redis.ping();
+    // Race the ping against a 3s timeout so a broken Redis doesn't hang the health route
+    const pong = await Promise.race([
+      redis.ping(),
+      new Promise<never>((_, reject) =>
+        setTimeout(() => reject(new Error('Redis ping timed out after 3s')), 3000)
+      ),
+    ]);
     const latencyMs = Date.now() - start;
     if (pong !== 'PONG') {
       return { status: 'error', latencyMs, detail: 'Unexpected PING response' };
