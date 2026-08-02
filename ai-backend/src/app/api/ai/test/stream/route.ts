@@ -10,6 +10,9 @@ import { redis } from '@/lib/redis';
 import { randomUUID } from 'crypto';
 import type { UserContext } from '@/app/api/ai/chat/stream/route';
 
+export const dynamic = 'force-dynamic';
+
+
 type TestStreamBody = {
   message: string;
   testSessionId?: string;

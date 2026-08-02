@@ -3,6 +3,9 @@ import { db } from '@/db/client';
 import { env } from '@/lib/env';
 import * as jose from 'jose';
 
+export const dynamic = 'force-dynamic';
+
+
 type VerifyBody = {
   token: string;
   sessionId: string;

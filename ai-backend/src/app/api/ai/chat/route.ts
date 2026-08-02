@@ -2,6 +2,9 @@ import { NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { processMessage } from '@/agent/orchestrator';
 
+export const dynamic = 'force-dynamic';
+
+
 /**
  * POST /api/ai/chat
  * Non-streaming chat endpoint (simple version)

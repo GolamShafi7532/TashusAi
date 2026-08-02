@@ -7,6 +7,9 @@ import { NextRequest, NextResponse } from 'next/server';
 import { db } from '@/db/client';
 import { redis, buildSessionControlChannel } from '@/lib/redis';
 
+export const dynamic = 'force-dynamic';
+
+
 export async function POST(req: NextRequest, { params }: { params: { id: string } }) {
   try {
     const sessionId = params.id;

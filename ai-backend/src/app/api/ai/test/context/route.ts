@@ -8,6 +8,9 @@ import { retrieve } from '@/rag/retriever';
 import { getEmbeddingProvider } from '@/rag/embedding-provider';
 import { db } from '@/db/client';
 
+export const dynamic = 'force-dynamic';
+
+
 type ContextBody = {
   message: string;
 };
