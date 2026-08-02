@@ -7,6 +7,9 @@ import { NextResponse } from 'next/server';
 import { AGENT_TOOLS } from '@/agent/tools';
 import { loadActiveAgentConfig } from '@/agent/config';
 
+export const dynamic = 'force-dynamic';
+
+
 export async function GET() {
   try {
     // Load active agent config to check which tools are enabled
