@@ -11,7 +11,7 @@
 # Run:   docker run --env-file .env.production tashus-worker
 # ─────────────────────────────────────────────────────────────────────────────
 
-FROM node:20-alpine AS base
+FROM node:22-alpine
 
 # Install system-level build tools required for native Node modules:
 #   - python3, make, g++: needed by argon2, canvas, and other gyp-based packages
