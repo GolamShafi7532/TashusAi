@@ -1,0 +1,43 @@
+# ─────────────────────────────────────────────────────────────────────────────
+# BullMQ Worker — Tashus AI Backend
+# Deployed to Koyeb free nano instance.
+#
+# This is a LONG-RUNNING worker process, not a web server.
+# It listens on BullMQ queues and processes background jobs:
+#   - ingest-document  : PDF parse → chunk → embed → store to Supabase
+#   - summarize-session: Rolling conversation summary
+#
+# Build: docker build -f Dockerfile.worker -t tashus-worker .
+# Run:   docker run --env-file .env.production tashus-worker
+# ─────────────────────────────────────────────────────────────────────────────
+
+FROM node:20-alpine AS base
+
+# Install system-level build tools required for native Node modules:
+#   - python3, make, g++: needed by argon2, canvas, and other gyp-based packages
+#   - openssl: required for TLS connections to Upstash Redis
+RUN apk add --no-cache python3 make g++ openssl
+
+WORKDIR /app
+
+# ── Install dependencies ───────────────────────────────────────────────────
+# Copy only package files first to leverage Docker layer caching.
+# A change to source code won't re-run npm ci.
+COPY package*.json ./
+
+# Install ALL deps (including devDeps) — tsx needs to be available
+RUN npm ci
+
+# ── Copy source ────────────────────────────────────────────────────────────
+COPY tsconfig.json ./
+COPY src/ ./src/
+
+# ── Set WORKER_PROCESS so redis.ts uses BullMQ-compatible config ──────────
+ENV WORKER_PROCESS=true
+ENV NODE_ENV=production
+
+# No port to expose — this is a pure worker, not a web server
+# Koyeb will keep the process alive as a "Worker" service type
+
+# Graceful shutdown is handled in run-workers.ts (SIGTERM / SIGINT handlers)
+CMD ["npx", "tsx", "src/workers/run-workers.ts"]

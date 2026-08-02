@@ -1,11 +1,20 @@
 /** @type {import('next').NextConfig} */
 const nextConfig = {
-  // Isolated from Tashus_Frontend_V1 — separate Vercel project
-  // No rewrites to Tashus routes — all Tashus calls go through tashus-adapter only
+  // Keep native-module / heavy server packages out of the browser bundle.
+  // pdf-parse uses require('fs'), ioredis/bullmq have Node-only internals.
+  // argon2 has native C++ bindings — will never work in the browser.
+  // NOTE: In Next.js 14 this lives under `experimental`. It moves to the
+  //       top-level `serverExternalPackages` key in Next.js 15.
   experimental: {
-    // Keep all server-only packages out of the browser bundle.
-    // In Next.js 14 this is the correct location (renamed to serverExternalPackages in v15).
     serverComponentsExternalPackages: ['pdf-parse', 'ioredis', 'bullmq', 'argon2'],
+  },
+
+  // Allow images from Cloudinary and Supabase storage used by vehicle cards
+  images: {
+    remotePatterns: [
+      { protocol: 'https', hostname: 'res.cloudinary.com' },
+      { protocol: 'https', hostname: '*.supabase.co' },
+    ],
   },
 };
 

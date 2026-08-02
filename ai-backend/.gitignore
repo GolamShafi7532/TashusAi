@@ -32,3 +32,10 @@ coverage/
 npm-debug.log*
 yarn-debug.log*
 yarn-error.log*
+
+# Docker
+*.dockerignore
+
+# public/widget.js is intentionally committed — it is the pre-built widget
+# bundle served to users. Do NOT add it here.
+# To rebuild it locally: cd ../ai-widget && npm run build
