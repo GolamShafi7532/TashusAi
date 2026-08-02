@@ -765,4 +765,5 @@ export async function processMessage(sessionId: string, userText: string, userCo
   return { message: finalMessage, sources };
 }
 
-export default { processMessage, processMessageStream };
+const orchestratorClient = { processMessage, processMessageStream };
+export default orchestratorClient;
