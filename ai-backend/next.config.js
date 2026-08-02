@@ -6,7 +6,7 @@ const nextConfig = {
   // NOTE: In Next.js 14 this lives under `experimental`. It moves to the
   //       top-level `serverExternalPackages` key in Next.js 15.
   experimental: {
-    serverComponentsExternalPackages: ['pdf-parse', 'ioredis', 'bullmq', 'argon2'],
+    serverComponentsExternalPackages: ['pdf-parse', 'ioredis', 'bullmq', 'argon2', 'nodemailer'],
   },
 
   // Allow images from Cloudinary and Supabase storage used by vehicle cards

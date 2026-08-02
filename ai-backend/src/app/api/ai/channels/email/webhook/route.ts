@@ -8,6 +8,8 @@ import {
 } from '@/channels/email/parser';
 import type { InboundMessageEnvelope } from '@/channels/types';
 
+export const dynamic = 'force-dynamic';
+
 /**
  * POST /api/ai/channels/email/webhook
  *
