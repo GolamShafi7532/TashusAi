@@ -11,6 +11,7 @@ import { randomUUID } from 'crypto';
 import type { UserContext } from '@/app/api/ai/chat/stream/route';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // Vercel: keep alive for SSE streams
 
 
 type TestStreamBody = {

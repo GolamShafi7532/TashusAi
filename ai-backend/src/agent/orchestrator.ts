@@ -313,6 +313,9 @@ export async function* processMessageStream(sessionId: string, userText: string,
   let finalMessageText = '';
 
   const maxRounds = 5;
+
+  // ── LLM Loop with LLM_EXHAUSTED handoff catch (Phase 5) ──────────────────
+  try {
   for (let round = 0; round < maxRounds; round++) {
     let assistantTextThisRound = '';
     let toolCallThisRound: { id: string; name: string; args: any } | null = null;
@@ -555,10 +558,65 @@ export async function* processMessageStream(sessionId: string, userText: string,
       // No tool calls this round, conversation turn is complete
       break;
     }
+  } // end maxRounds for loop
+
+  } catch (llmErr: any) {
+    // ── Phase 5: Graceful Rate Limit Handoff ────────────────────────────────
+    // When all LLM providers are exhausted (LLM_EXHAUSTED), trigger human
+    // handoff instead of serving a crude mock response.
+    if (llmErr?.code === 'LLM_EXHAUSTED' && dbSessionId) {
+      console.error(`[Orchestrator] 🚨 LLM exhausted — triggering auto-handoff for session ${sessionId}`);
+
+      // Fetch existing metadata to merge the handoff reason
+      const { data: existingSession } = await (db.from('ai_chat_sessions') as any)
+        .select('metadata, visitor_id')
+        .eq('id', dbSessionId)
+        .single();
+
+      await (db.from('ai_chat_sessions') as any)
+        .update({
+          is_ai_paused: true,
+          status: 'handed_off',
+          last_message_at: new Date().toISOString(),
+          metadata: {
+            ...(existingSession?.metadata || {}),
+            handoff_reason: 'rate_limit_exhausted',
+          },
+        })
+        .eq('id', dbSessionId);
+
+      const systemMsg = '⚠️ AI support is temporarily paused due to high demand. Connecting you to a human agent — please hold on a moment.';
+      await (db.from('ai_chat_messages') as any)
+        .insert({ session_id: dbSessionId, role: 'system', content: systemMsg });
+
+      try {
+        const { redis: redisClient, buildSessionControlChannel } = await import('@/lib/redis');
+        await redisClient.publish(buildSessionControlChannel(dbSessionId), JSON.stringify({
+          type: 'control',
+          paused: true,
+          message: { role: 'system', content: systemMsg },
+        }));
+        await redisClient.publish('admin:notifications', JSON.stringify({
+          type: 'handoff_requested',
+          session_id: dbSessionId,
+          visitor_id: existingSession?.visitor_id,
+          reason: 'rate_limit_exhausted',
+          timestamp: new Date().toISOString(),
+        }));
+      } catch (redisErr) {
+        console.warn('[Orchestrator] Redis publish failed during LLM exhaustion handoff:', redisErr);
+      }
+
+      yield { type: 'paused' as const, message: { role: 'system', content: systemMsg } };
+      yield { type: 'done' as const, message: systemMsg, sources: [] };
+      return;
+    }
+
+    // Non-LLM-exhaustion error — re-throw for the stream route to handle
+    throw llmErr;
   }
 
   // ── Inject vehicle card tags when search_vehicles was called ──────────────
-  // Replace the LLM's plain text entirely with vehicle cards only.
   const vehicleToolCall = toolCalls.find((t) => t.name === 'search_vehicles' && t.result?.shown?.length > 0);
   if (vehicleToolCall) {
     const shown: any[] = vehicleToolCall.result.shown ?? [];

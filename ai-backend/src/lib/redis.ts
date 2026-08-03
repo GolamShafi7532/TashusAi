@@ -24,11 +24,18 @@
 import Redis from 'ioredis';
 import { env } from '@/lib/env';
 
-let _redis: Redis | null = null;
-let _subscriber: Redis | null = null;
-
 /** True when running inside the dedicated BullMQ worker process on Koyeb. */
 const IS_WORKER = process.env.WORKER_PROCESS === 'true';
+
+// ── Global singleton registry ──────────────────────────────────────────────
+// Vercel reuses the same Node.js process across warm invocations on the same
+// instance. Pinning the client to `globalThis` ensures the TCP connection (or
+// HTTP keep-alive for Upstash) survives across hot-function calls without
+// being garbage-collected or re-created on every request.
+const g = globalThis as unknown as {
+  _tashusRedis: Redis | undefined;
+  _tashusRedisSubscriber: Redis | undefined;
+};
 
 /**
  * Main Redis client — used for get/set/publish and BullMQ connection.
@@ -38,9 +45,9 @@ const IS_WORKER = process.env.WORKER_PROCESS === 'true';
  *   - Serverless (Vercel): 1 — fail fast so the function doesn't hang
  */
 export function getRedisClient(): Redis {
-  if (_redis) return _redis;
+  if (g._tashusRedis) return g._tashusRedis;
 
-  _redis = new Redis(env.REDIS_URL, {
+  const client = new Redis(env.REDIS_URL, {
     // BullMQ requires null; serverless needs a number to avoid hanging functions
     maxRetriesPerRequest: IS_WORKER ? null : 1,
     enableReadyCheck: false,
@@ -58,19 +65,19 @@ export function getRedisClient(): Redis {
     tls: env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
   });
 
-  _redis.on('error', (err) => {
-    // Suppress noisy "connect ECONNREFUSED" in dev if Redis isn't running
+  client.on('error', (err) => {
     if (env.NODE_ENV === 'development' && err.message.includes('ECONNREFUSED')) return;
     console.error('[Redis] Connection error:', err.message);
   });
 
-  _redis.on('connect', () => {
+  client.on('connect', () => {
     if (env.NODE_ENV !== 'production') {
       console.log('[Redis] Connected');
     }
   });
 
-  return _redis;
+  g._tashusRedis = client;
+  return client;
 }
 
 /**
@@ -79,9 +86,9 @@ export function getRedisClient(): Redis {
  * Used by the SSE handler (blueprint §4.1) to listen on session:{id}:control.
  */
 export function getRedisSubscriber(): Redis {
-  if (_subscriber) return _subscriber;
+  if (g._tashusRedisSubscriber) return g._tashusRedisSubscriber;
 
-  _subscriber = new Redis(env.REDIS_URL, {
+  const sub = new Redis(env.REDIS_URL, {
     maxRetriesPerRequest: IS_WORKER ? null : 1,
     enableReadyCheck: false,
     lazyConnect: IS_WORKER ? false : true,
@@ -92,12 +99,13 @@ export function getRedisSubscriber(): Redis {
     tls: env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
   });
 
-  _subscriber.on('error', (err) => {
+  sub.on('error', (err) => {
     if (env.NODE_ENV === 'development' && err.message.includes('ECONNREFUSED')) return;
     console.error('[Redis Subscriber] Error:', err.message);
   });
 
-  return _subscriber;
+  g._tashusRedisSubscriber = sub;
+  return sub;
 }
 
 // ── Cache key builders ──────────────────────────────────────────────────────

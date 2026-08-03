@@ -243,6 +243,7 @@ function SessionCard({ session, isActive, onClick }: {
   onClick: () => void;
 }) {
   const isHandoff = session.is_ai_paused || session.status === 'handed_off';
+  const isRateLimitHandoff = (session as any).metadata?.handoff_reason === 'rate_limit_exhausted';
   const avatarColor = isHandoff ? '#F2994A' : '#20B9BE';
   const avatarBg = isHandoff ? 'bg-[#F2994A]/10' : 'bg-[#20B9BE]/10';
   const avatarInitials = session.visitor_id.substring(0, 2).toUpperCase();
@@ -272,6 +273,12 @@ function SessionCard({ session, isActive, onClick }: {
           {avatarInitials}
           {isHandoff && (
             <span className="absolute -top-0.5 -right-0.5 w-3 h-3 bg-[#F2994A] rounded-full animate-pulse" />
+          )}
+          {isRateLimitHandoff && (
+            <span
+              title="Handoff triggered by AI rate limit — all LLM providers exhausted"
+              className="absolute -bottom-0.5 -right-0.5 text-[9px] leading-none"
+            >⚠️</span>
           )}
         </div>
 

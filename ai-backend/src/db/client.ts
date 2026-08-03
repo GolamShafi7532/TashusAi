@@ -179,9 +179,14 @@ export function getSupabaseClient(): SupabaseClient<Database> {
 
   _client = createClient<Database>(env.SUPABASE_URL, env.SUPABASE_SERVICE_ROLE_KEY, {
     auth: {
-      // Server-side service role — no session persistence needed
       persistSession: false,
       autoRefreshToken: false,
+    },
+    global: {
+      // keepalive: true reuses the HTTP/2 connection across warm Vercel invocations,
+      // eliminating the TCP handshake overhead on the 2nd–Nth sequential requests.
+      fetch: (url: RequestInfo | URL, options?: RequestInit) =>
+        fetch(url, { ...options, keepalive: true }),
     },
   });
 

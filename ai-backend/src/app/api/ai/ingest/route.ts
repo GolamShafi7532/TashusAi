@@ -18,7 +18,7 @@ import { getEmbeddingProvider } from '@/rag/embedding-provider';
 import { chunkPages, type RawPage } from '@/rag/chunker';
 
 export const dynamic = 'force-dynamic';
-export const maxDuration = 120; // Allow up to 2 minutes for large PDFs
+export const maxDuration = 120; // Vercel: allow up to 2 min for PDF ingestion
 
 const EMBED_BATCH_SIZE = 64;
 

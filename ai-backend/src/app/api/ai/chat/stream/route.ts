@@ -2,6 +2,7 @@ import { NextResponse } from 'next/server';
 import { db } from '@/db/client';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // Vercel: keep function alive for long Groq streams
 import { processMessageStream } from '@/agent/orchestrator';
 import { getRedisSubscriber, buildSessionControlChannel, redis } from '@/lib/redis';
 import { isRateLimited } from '@/lib/rate-limiter';

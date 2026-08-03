@@ -7,6 +7,7 @@ import { NextRequest } from 'next/server';
 import { redis } from '@/lib/redis';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // Vercel: keep alive for SSE streams
 export const runtime = 'nodejs';
 
 export async function GET(req: NextRequest) {

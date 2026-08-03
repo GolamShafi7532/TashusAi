@@ -10,6 +10,7 @@ import Redis from 'ioredis';
 import { env } from '@/lib/env';
 
 export const dynamic = 'force-dynamic';
+export const maxDuration = 300; // Vercel: keep alive for SSE streams
 export const runtime = 'nodejs';
 
 function resolveAllowedOrigin(requestOrigin: string | null): string {

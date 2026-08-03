@@ -946,9 +946,12 @@ export async function* generateCompletionStream(params: {
     }
   } catch (err: any) {
     console.error('[LLM] ⚠️  All real providers exhausted:', err.message);
-    // Last resort: tool-aware mock so the user gets some response
-    console.warn('[LLM] ⚠️  Falling back to tool-aware mock');
-    yield* generateToolAwareMock(params.messages, params.tools);
+    // Throw a typed error — the orchestrator catches this and triggers human handoff
+    // instead of falling back to the crude tool-aware mock.
+    throw Object.assign(
+      new Error('All LLM providers exhausted'),
+      { code: 'LLM_EXHAUSTED', cause: err?.message ?? 'All providers failed' }
+    );
   }
 }
 
