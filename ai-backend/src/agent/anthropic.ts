@@ -21,7 +21,7 @@ export async function callAnthropicCompletion(prompt: string, opts?: { model?: s
 
   try {
     const res = await client.messages.create({
-      model: opts?.model ?? 'claude-3-5-sonnet-20240620',
+      model: opts?.model ?? 'claude-sonnet-4-5',
       max_tokens: opts?.maxTokens ?? 512,
       system: 'You are a helpful customer support assistant.',
       messages: [{ role: 'user', content: prompt }],

@@ -190,8 +190,46 @@ Do NOT try to answer the question yourself — call this tool right away.`,
   },
 ];
 
-export async function executeTool(name: string, args: Record<string, any>, opts?: { sessionId?: string }) {
-  switch (name) {
+/**
+ * Dynamic schema router — returns a filtered subset of tools based on the
+ * user's expressed intent. Reduces prompt overhead by ~300 tokens/turn for
+ * scoped queries by omitting irrelevant tool schemas.
+ *
+ * Rules:
+ * - Pure vehicle search intent (no policy keywords) → omit search_knowledge_base
+ * - Pure policy/FAQ intent (no vehicle search keywords) → omit search_vehicles + check_availability
+ * - Mixed or ambiguous intent → all 6 tools (safe default)
+ */
+export function getToolsForIntent(userText: string): ToolSchema[] {
+  const t = userText.toLowerCase();
+
+  // Policy-specific keywords — these queries need KB, not vehicle search
+  const hasPolicyKeywords = /\b(policy|rule|allow|permit|smoke|smoking|cancel|cancellation|insurance|excess|deposit|fee|age|limit|damage|accident|refund|penalty|late|extend|lost|lose|stolen|theft|broke|broken|scratch|fine|charge|liable|liability|responsible|document|agreement|term|condition|requirement|guideline|restriction|how does|how do|what is|what are|what will|what happens|can i|is it|do you|does tashus|if i|if the)\b/.test(t);
+
+  // Vehicle search keywords — these queries need search tools, not KB
+  const hasSearchKeywords = /\b(suv|sedan|hatchback|ute|van|convertible|coupe|wagon|available|rent|hire|find|show me|book|sydney|melbourne|brisbane|perth|adelaide)\b/.test(t);
+
+  // Pure policy: no search intent, has policy keywords → omit vehicle search tools
+  if (hasPolicyKeywords && !hasSearchKeywords) {
+    console.log('[ToolRouter] Policy intent detected — routing to KB + escalate only');
+    return AGENT_TOOLS.filter(t =>
+      ['search_knowledge_base', 'validate_voucher', 'escalate_to_human'].includes(t.name)
+    );
+  }
+
+  // Pure vehicle search: has search keywords, no policy keywords → omit KB tool
+  if (hasSearchKeywords && !hasPolicyKeywords) {
+    console.log('[ToolRouter] Vehicle search intent detected — routing to search tools');
+    return AGENT_TOOLS.filter(t =>
+      ['search_vehicles', 'get_vehicle_details', 'check_availability', 'validate_voucher', 'escalate_to_human'].includes(t.name)
+    );
+  }
+
+  // Mixed/ambiguous → all tools (safe default)
+  return AGENT_TOOLS;
+}
+
+export async function executeTool(name: string, args: Record<string, any>, opts?: { sessionId?: string }) {  switch (name) {
     case 'search_vehicles':
       // Map minSeats → seats for backwards-compat with adapter (adapter handles minSeats already)
       return adapter.searchVehicles({ ...args, seats: args.minSeats ?? args.seats } as any);

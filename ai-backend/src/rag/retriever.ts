@@ -20,8 +20,8 @@ import { db } from '@/db/client';
 import { getEmbeddingProvider, MockEmbeddingProvider } from './embedding-provider';
 import { estimateTokens } from './chunker';
 
-const KB_SIMILARITY_THRESHOLD = 0.60;
-const CHUNK_SIMILARITY_THRESHOLD = 0.50;
+const KB_SIMILARITY_THRESHOLD = 0.75;    // raised from 0.60 — calibrated for real OpenAI embeddings
+const CHUNK_SIMILARITY_THRESHOLD = 0.65; // raised from 0.50 — filters noisy chunk matches
 const KB_LIMIT = 4;
 const CHUNK_LIMIT = 4;
 const MAX_CONTEXT_TOKENS = 2000;

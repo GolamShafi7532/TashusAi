@@ -14,7 +14,7 @@ import { db, AiAgentConfig } from '@/db/client';
 import { retrieve, searchKnowledgeBaseTool } from '@/rag/retriever';
 import { ragDedupCache } from '@/rag/dedup-cache';
 import { generateCompletionStream } from '@/agent/llm';
-import { executeTool, AGENT_TOOLS } from '@/agent/tools';
+import { executeTool, AGENT_TOOLS, getToolsForIntent } from '@/agent/tools';
 import { validateToolCall } from '@/agent/tool-executor';
 import { detectHallucinations } from '@/agent/fact-checker';
 import { loadActiveAgentConfig } from '@/agent/config';
@@ -312,16 +312,54 @@ export async function* processMessageStream(sessionId: string, userText: string,
   const toolCalls: Array<{ name: string; params: any; result?: any; logId?: string }> = [];
   let finalMessageText = '';
 
-  const maxRounds = 5;
+  // Phase 2.2: Route to minimal tool set based on user intent
+  const intentFilteredTools = getToolsForIntent(userText);
+  console.log(`[Orchestrator] Tool set: [${intentFilteredTools.map(t => t.name).join(', ')}] (${intentFilteredTools.length}/${AGENT_TOOLS.length} tools)`);
+
+  // Phase 3.1: Fuzzy vehicle resolution from conversation context
+  // If user refers to a vehicle shown earlier ("tell me about the Toyota"),
+  // inject the resolved listingId before calling the LLM.
+  const shownVehicleTags: Array<{listingId: number; displayName: string}> = [];
+  for (const msg of conversation.recentMessages) {
+    if (msg.role !== 'assistant') continue;
+    const matches = [...(msg.content as string).matchAll(/\[VEHICLE:\s*(\{[^[\]]+\})/g)];
+    for (const m of matches) {
+      try {
+        const v = JSON.parse(m[1]);
+        if (v.listingId && v.displayName && v.type !== 'view_more') {
+          shownVehicleTags.push({ listingId: v.listingId, displayName: v.displayName });
+        }
+      } catch { /* malformed tag, skip */ }
+    }
+  }
+
+  if (shownVehicleTags.length > 0) {
+    const lowerText = userText.toLowerCase();
+    const isDetailQuery = /\b(detail|more|about|tell|info|feature|spec|book|available|bluetooth|pet|dog|cat|smoke|guideline|rule|restriction)\b/i.test(userText);
+    if (isDetailQuery) {
+      const fuzzyMatch = shownVehicleTags.find(v => {
+        const nameParts = v.displayName.toLowerCase().split(/\s+/);
+        return nameParts.some(word => word.length > 3 && lowerText.includes(word));
+      });
+      if (fuzzyMatch) {
+        const last = loopMessages[loopMessages.length - 1];
+        if (last?.role === 'user') {
+          last.content = `${last.content} [Resolved vehicle: listingId=${fuzzyMatch.listingId}, "${fuzzyMatch.displayName}"]`;
+          console.log(`[Orchestrator] 🎯 Fuzzy vehicle resolved: ${fuzzyMatch.displayName} (${fuzzyMatch.listingId})`);
+        }
+      }
+    }
+  }
 
   // ── LLM Loop with LLM_EXHAUSTED handoff catch (Phase 5) ──────────────────
+  const maxRounds = 5;
   try {
   for (let round = 0; round < maxRounds; round++) {
     let assistantTextThisRound = '';
     let toolCallThisRound: { id: string; name: string; args: any } | null = null;
 
     // Force empty tools array on the final round to guarantee a text response
-    const toolsToUse = round === maxRounds - 1 ? [] : AGENT_TOOLS;
+    const toolsToUse = round === maxRounds - 1 ? [] : intentFilteredTools;
 
     console.log(`[Orchestrator] Round ${round + 1}/${maxRounds} — calling LLM${toolsToUse.length > 0 ? ` with ${toolsToUse.length} tools` : ' (no tools — final round)'}`);
 
@@ -614,6 +652,27 @@ export async function* processMessageStream(sessionId: string, userText: string,
 
     // Non-LLM-exhaustion error — re-throw for the stream route to handle
     throw llmErr;
+  }
+
+  // ── Phase 3.2: Template formatting for check_availability ───────────────
+  // Skip the second LLM round for availability results — format directly in code.
+  const availCall = toolCalls.find(t => t.name === 'check_availability' && t.result);
+  const hasVehicleSearch = toolCalls.some(t => t.name === 'search_vehicles');
+  if (availCall && !hasVehicleSearch && !finalMessageText.trim()) {
+    const blockDates = availCall.result;
+    const allBlocked = [...(blockDates?.allDayList ?? []), ...(blockDates?.customList ?? [])];
+    let availText: string;
+    if (allBlocked.length > 0) {
+      const dateList = allBlocked.slice(0, 5)
+        .map((d: any) => `• ${new Date(d.start).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })} – ${new Date(d.end).toLocaleDateString('en-AU', { day: 'numeric', month: 'short', year: 'numeric' })}`)
+        .join('\n');
+      availText = `This vehicle has some blocked dates:\n\n${dateList}${allBlocked.length > 5 ? `\n...and ${allBlocked.length - 5} more periods` : ''}\n\nFor any dates outside these periods the vehicle should be available. Would you like me to search for vehicles on specific dates instead?`;
+    } else {
+      availText = `Great news — this vehicle has no blocked dates in our system and appears to be available. I'd recommend confirming on the Tashus listing page before booking.`;
+    }
+    finalMessageText = availText;
+    yield { type: 'token' as const, text: availText };
+    console.log(`[Orchestrator] 📅 check_availability template: ${allBlocked.length} blocked periods`);
   }
 
   // ── Inject vehicle card tags when search_vehicles was called ──────────────
