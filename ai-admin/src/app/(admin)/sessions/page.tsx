@@ -380,18 +380,24 @@ function InlineChatPanel({ sessionId, onClose, onUpdate }: {
   const handleSend = async () => {
     if (!composerText.trim() || sending) return;
     setSending(true);
+    const msgToSend = composerText.trim();
+    setComposerText(''); // Clear immediately for better UX
     try {
       const res = await apiFetch(`/api/admin/sessions/${sessionId}/messages`, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ content: composerText.trim() }),
+        body: JSON.stringify({ content: msgToSend }),
       });
       if (res.ok) {
-        setComposerText('');
         await fetchDetail();
         onUpdate();
+      } else {
+        // Restore message if send failed
+        setComposerText(msgToSend);
+        console.error('Send failed with status:', res.status);
       }
     } catch (err) {
+      setComposerText(msgToSend); // Restore on error
       console.error('Send failed:', err);
     } finally {
       setSending(false);
