@@ -186,7 +186,9 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
       }
     });
 
-    // 2. HTTP Polling every 2.5s as background fallback
+    // 2. HTTP Polling — only runs during handoff (is_ai_paused=true) or as infrequent safety net
+    // When AI is active: SSE handles all real-time delivery, poll at 15s just as a safety net
+    // When in handoff: poll at 3s to ensure admin messages arrive even if SSE drops
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
 
@@ -220,10 +222,16 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
         }
       }
 
-      if (active) timer = setTimeout(poll, 2500);
+      if (active) {
+        // Poll frequently during handoff (admin messages need fast delivery)
+        // Poll rarely when AI is active (SSE handles real-time, poll is just a safety net)
+        const interval = pausedRef.current ? 3000 : 15000;
+        timer = setTimeout(poll, interval);
+      }
     };
 
-    timer = setTimeout(poll, 2000);
+    // Initial poll after 3s to let history load settle
+    timer = setTimeout(poll, 3000);
 
     return () => {
       active = false;
