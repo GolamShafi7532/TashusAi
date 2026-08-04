@@ -60,7 +60,7 @@ The Tashus AI Chatbot is a production-deployed, multi-component system providing
 | Job Queue | BullMQ | @5.8.1 | Requires `maxRetriesPerRequest: null` |
 | PDF Parsing | pdf-parse | @1.1.1 | Worker process only |
 | Auth (admin) | jose (JWT) | @5.6.3 | HS256, 15min access / 7d refresh |
-| Deployment | Vercel (serverless) | — | `tashus-ai-ten.vercel.app` |
+| Deployment | Vercel (serverless) | — | `tashus-ai-backend.bepario.com` |
 
 ### ai-admin (Next.js Dashboard)
 | Component | Technology | Version |
@@ -70,7 +70,7 @@ The Tashus AI Chatbot is a production-deployed, multi-component system providing
 | Auth | argon2 → bcryptjs (production fix) | @3.0.3 |
 | Redis client | ioredis | @5.11.1 |
 | Icons | lucide-react | @1.24.0 |
-| Deployment | Vercel | `tashus-ai-admin.vercel.app` |
+| Deployment | Vercel | `tashus-ai-admin.bepario.com` |
 
 ### ai-widget (Embeddable Bundle)
 | Component | Technology | Version |
@@ -190,13 +190,13 @@ TashusChatBot/
 │  USER BROWSER                                                    │
 │  localhost:3000 (Tashus Frontend V1) or tashus.com              │
 │                                                                  │
-│  <script src="https://tashus-ai-ten.vercel.app/widget.js">      │
+│  <script src="https://tashus-ai-backend.bepario.com/widget.js">      │
 │  window.tashusAiConfig = { backendUrl: "https://..." }          │
 └──────────────────────────────┬──────────────────────────────────┘
                                │ HTTPS POST/SSE
                                ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│  VERCEL — ai-backend   tashus-ai-ten.vercel.app                 │
+│  VERCEL — ai-backend   tashus-ai-backend.bepario.com                 │
 │                                                                  │
 │  /api/ai/chat/stream     ← Main SSE stream (300s max)           │
 │  /api/ai/session         ← Create/resume session                │
@@ -222,7 +222,7 @@ TashusChatBot/
 └────────────────────────┘
 
 ┌─────────────────────────────────────────────────────────────────┐
-│  VERCEL — ai-admin    tashus-ai-admin.vercel.app                │
+│  VERCEL — ai-admin    tashus-ai-admin.bepario.com                │
 │                                                                  │
 │  /sessions              ← Two-panel inbox                       │
 │  /documents             ← PDF upload + ingestion                │
@@ -245,10 +245,10 @@ TashusChatBot/
 ### Production URLs
 | Service | URL |
 |---|---|
-| AI Backend | `https://tashus-ai-ten.vercel.app` |
-| AI Admin | `https://tashus-ai-admin.vercel.app` |
-| Widget JS | `https://tashus-ai-ten.vercel.app/widget.js` |
-| Health Check | `https://tashus-ai-ten.vercel.app/api/ai/health` |
+| AI Backend | `https://tashus-ai-backend.bepario.com` |
+| AI Admin | `https://tashus-ai-admin.bepario.com` |
+| Widget JS | `https://tashus-ai-backend.bepario.com/widget.js` |
+| Health Check | `https://tashus-ai-backend.bepario.com/api/ai/health` |
 
 ### Vercel Function Timeouts
 | Route | Max Duration |
@@ -1241,7 +1241,7 @@ All of ai-backend vars plus:
 ### ai-widget Build
 | Variable | Notes |
 |---|---|
-| `VITE_AI_BACKEND_URL` | Baked into bundle at build time. Production: `https://tashus-ai-ten.vercel.app` |
+| `VITE_AI_BACKEND_URL` | Baked into bundle at build time. Production: `https://tashus-ai-backend.bepario.com` |
 
 ---
 
