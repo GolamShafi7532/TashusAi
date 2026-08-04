@@ -1,3018 +1,1277 @@
-# Tashus AI Ecosystem — Complete Project Blueprint
+# Tashus AI Chatbot — Project Blueprint
 
-> **Purpose:** Comprehensive architectural context anchor for AI agents and engineers.
-> **Scope:** Vehicle search, live availability, reservations, vouchers, promotions, and AI chatbot orchestration.
-> **Source:** Static + dynamic analysis of `Tashus_Frontend_V1` and `TashusChatBot` (ai-backend, ai-admin, ai-widget) codebases.
-> **Generated:** 2026-07-13
-
----
-
-## Executive Summary
-
-This blueprint maps the complete data flow, API contracts, and backend service logic for the Tashus vehicle rental platform's AI integration layer. It documents:
-
-1. **Vehicle Inventory System** — How cars are stored, searched, and filtered
-2. **Real-Time Availability Matrix** — Block dates, reservation conflicts, and booking validation
-3. **Pricing Engine** — Base rates, peak pricing, discounts, custom pricing overrides
-4. **Reservation Flow** — From search to checkout to payment completion
-5. **Voucher & Promotion System** — Rule-based eligibility, usage limits, and discount application
-6. **AI Chatbot Architecture** — Agent orchestration, RAG knowledge base, tool execution, and read-only adapter pattern
-
-**Critical Architectural Principle:** The AI ecosystem is **strictly read-only** against the Tashus production database. All mutating operations (create reservation, apply voucher) are delegated to authenticated user flows on the main frontend.
+> **Version:** 3.2.0
+> **Last Updated:** 2026-08-03
+> **Status:** Production (deployed to Vercel)
+> **Scope:** AI chatbot backend (`ai-backend`), admin dashboard (`ai-admin`), embeddable widget (`ai-widget`)
 
 ---
 
 ## Table of Contents
 
-1. [Technology Stack](#1-technology-stack)
-2. [Directory Structure](#2-directory-structure)
-3. [Database Schema — AI Ecosystem](#3-database-schema--ai-ecosystem)
-4. [Data Models — Tashus Production](#4-data-models--tashus-production)
-5. [Backend API Endpoints](#5-backend-api-endpoints)
-6. [AI Chatbot Architecture](#6-ai-chatbot-architecture)
-7. [Agent Tool Registry](#7-agent-tool-registry)
-8. [Tashus Read-Only Adapter](#8-tashus-read-only-adapter)
-9. [Service Flows — Critical Paths](#9-service-flows--critical-paths)
-10. [Payload Examples — JSON Contracts](#10-payload-examples--json-contracts)
-11. [Frontend State Management](#11-frontend-state-management)
-12. [Availability Validation Logic](#12-availability-validation-logic)
-13. [Price Calculation Pipeline](#13-price-calculation-pipeline)
-14. [Security & Authentication](#14-security--authentication)
-15. [Admin Chat Management System](#15-admin-chat-management-system)
-16. [Deployment & Configuration](#16-deployment--configuration)
-17. [Monitoring & Observability](#17-monitoring--observability)
-18. [Future Enhancements](#18-future-enhancements)
+1. [Executive Summary](#1-executive-summary)
+2. [Technology Stack](#2-technology-stack)
+3. [Repository Structure](#3-repository-structure)
+4. [Deployment Architecture](#4-deployment-architecture)
+5. [Database Schema](#5-database-schema)
+6. [AI Agent Architecture](#6-ai-agent-architecture)
+7. [Tool Registry](#7-tool-registry)
+8. [RAG Pipeline](#8-rag-pipeline)
+9. [LLM Provider Chain](#9-llm-provider-chain)
+10. [Human Handoff System](#10-human-handoff-system)
+11. [Admin Chat Management](#11-admin-chat-management)
+12. [Widget Architecture](#12-widget-architecture)
+13. [API Route Map](#13-api-route-map)
+14. [Redis Usage Map](#14-redis-usage-map)
+15. [BullMQ Worker Jobs](#15-bullmq-worker-jobs)
+16. [Tashus Read-Only Adapter](#16-tashus-read-only-adapter)
+17. [Token Cost Calculation](#17-token-cost-calculation)
+18. [Security Model](#18-security-model)
+19. [Environment Variables Reference](#19-environment-variables-reference)
+20. [Known Limitations & Future Work](#20-known-limitations--future-work)
 
 ---
 
-## 1. Technology Stack
+## 1. Executive Summary
 
-### Frontend (Tashus_Frontend_V1)
-| Layer | Technology | Version |
+The Tashus AI Chatbot is a production-deployed, multi-component system providing an embeddable chat widget for the Tashus vehicle rental platform. It handles vehicle search, availability checking, voucher validation, policy questions from uploaded PDFs, and live handoff to human support agents.
+
+**Key design principles:**
+- **Read-only** against the Tashus production API — no mutations, no bookings, no payments
+- **Stateless serverless backend** on Vercel with Redis for shared state across function invocations
+- **Streaming-first** — AI responses stream token-by-token via SSE; widget polls for admin messages
+- **Graceful degradation** — if LLM providers fail, tool-aware mock returns usable responses
+- **Human handoff** — keyword detection OR admin-initiated takeover pauses the AI circuit breaker
+
+---
+
+## 2. Technology Stack
+
+### ai-backend (Next.js API)
+| Component | Technology | Version | Notes |
+|---|---|---|---|
+| Framework | Next.js App Router | 14.2.35 | API routes only — no pages |
+| Language | TypeScript | 5.5.3 | Strict mode |
+| Primary LLM | Groq (llama-3.3-70b-versatile) | — | 6 API keys rotated via token bucket |
+| Fallback LLM | Anthropic Claude | @0.27.0 | Activated only when all Groq keys fail |
+| Embeddings | OpenAI text-embedding-3-large | — | Mock provider used when key is dummy |
+| Database | Supabase (PostgreSQL + pgvector) | @2.44.4 | AI-only project, not Tashus main DB |
+| Cache / Pub-Sub | Redis via ioredis | @5.4.1 | Upstash (TLS `rediss://`) in production |
+| Job Queue | BullMQ | @5.8.1 | Requires `maxRetriesPerRequest: null` |
+| PDF Parsing | pdf-parse | @1.1.1 | Worker process only |
+| Auth (admin) | jose (JWT) | @5.6.3 | HS256, 15min access / 7d refresh |
+| Deployment | Vercel (serverless) | — | `tashus-ai-ten.vercel.app` |
+
+### ai-admin (Next.js Dashboard)
+| Component | Technology | Version |
 |---|---|---|
-| Framework | Next.js (App Router) | 14.2.4 |
-| Language | TypeScript | 5.1.3 |
-| UI | MUI v5 + Tailwind CSS | 3.3.2 |
-| State | React Context + TanStack Query | v4 |
-| Forms | React Hook Form + Zod | v7 |
-| HTTP | Axios (authenticated) | v1.4 |
-| Auth | NextAuth v4 (JWT) | - |
-| Payment | Stripe Elements + Stripe.js | v3 |
-| Maps | Leaflet / React-Leaflet | - |
-| Date/Time | Day.js (UTC plugins) | - |
-| Deployment | Vercel | - |
+| Framework | Next.js App Router | 14.2.4 |
+| UI | Tailwind CSS + custom dark theme | — |
+| Auth | argon2 → bcryptjs (production fix) | @3.0.3 |
+| Redis client | ioredis | @5.11.1 |
+| Icons | lucide-react | @1.24.0 |
+| Deployment | Vercel | `tashus-ai-admin.vercel.app` |
 
-### Backend (TashusChatBot/ai-backend)
-| Layer | Technology | Version |
+### ai-widget (Embeddable Bundle)
+| Component | Technology | Version |
 |---|---|---|
-| Framework | Next.js 15 (App Router) | 15.1.3 |
-| Language | TypeScript | 5.x |
-| Database | PostgreSQL (Supabase) | - |
-| Vector Store | pgvector (1536-dim embeddings) | - |
-| ORM | Supabase Client (native SQL) | - |
-| AI Provider | Anthropic Claude Sonnet 4.5 | - |
-| Secondary LLM | Groq (Llama 3.3 70B for cost opt) | - |
-| Embeddings | OpenAI text-embedding-3-small | 1536-dim |
-| Realtime | Redis (channels + SSE) | - |
-| PDF Parsing | pdf-parse / pdf.js | - |
-| Deployment | Vercel | - |
-
-### Admin Dashboard (ai-admin)
-| Layer | Technology |
-|---|---|
-| Framework | Next.js 15 (App Router) |
-| UI | MUI v6 + Tailwind |
-| State | React Context + SWR |
-| Auth | Session cookies + JWT |
-
-### Widget (ai-widget)
-| Layer | Technology |
-|---|---|
-| Framework | React 18 (standalone bundle) |
-| Build | Vite |
-| UI | CSS Modules (no external deps) |
-| Transport | Fetch API (native) + SSE |
+| Framework | React | 19.2.7 |
+| Build tool | Vite | 8.1.1 |
+| Language | TypeScript | 6.0.2 |
+| CSS | Tailwind CSS | 4.3.2 |
+| SSE client | @microsoft/fetch-event-source | @2.0.1 |
+| UUID | uuid | @14.0.1 |
+| Output | `widget.iife.js` → `ai-backend/public/widget.js` | — |
 
 ---
 
-## 2. Directory Structure
+## 3. Repository Structure
 
-
-### Frontend (Tashus_Frontend_V1/src)
 ```
-src/
-├── app/                              # Next.js App Router pages
-│   ├── api/auth/                     # NextAuth handlers
-│   ├── search/                       # Vehicle search results
-│   │   └── [vehicleId]/
-│   │       ├── vehicle-details/      # Public detail page
-│   │       ├── checkout/             # Reservation checkout
-│   │       └── payment/[reservationId]/  # Stripe payment
-│   ├── car-listing/[carListingId]/   # Host listing wizard (7 steps)
-│   ├── promotion/[voucherSlug]/      # Voucher landing page
-│   ├── dashboard/[userId]/           # User dashboard
-│   │   └── travels/details/[reservationId]/  # Reservation details
-│   └── payment/holdAmount/[reservationId]/   # Hold deposit
+TashusChatBot/
+├── ai-backend/                    # Next.js API server (Vercel)
+│   ├── src/
+│   │   ├── agent/
+│   │   │   ├── orchestrator.ts    # Core chat loop — entry point for all messages
+│   │   │   ├── tools.ts           # 6-tool registry + dispatcher
+│   │   │   ├── config.ts          # Agent config loader (Redis cache + file prompt)
+│   │   │   ├── llm.ts             # Groq/Anthropic provider chain + mock
+│   │   │   ├── token-bucket.ts    # Groq key rotation + cooldown tracking
+│   │   │   ├── tool-executor.ts   # Input validation before dispatch
+│   │   │   ├── fact-checker.ts    # Hallucination detection
+│   │   │   └── prompts/
+│   │   │       └── system-prompt.md  # Always loaded from file, never DB
+│   │   ├── app/api/
+│   │   │   ├── ai/
+│   │   │   │   ├── chat/stream/    # Main SSE streaming endpoint
+│   │   │   │   ├── chat/[sessionId]/history/  # Reload history (force-dynamic)
+│   │   │   │   ├── session/        # Create/resume session
+│   │   │   │   ├── session/[id]/poll/    # Widget polling (admin msgs + state)
+│   │   │   │   ├── session/[id]/stream/  # Session SSE control channel
+│   │   │   │   ├── session/[id]/request-handoff/  # User-initiated handoff
+│   │   │   │   ├── ingest/         # PDF ingestion trigger
+│   │   │   │   ├── health/         # Liveness probe (DB + Redis + TashusAPI)
+│   │   │   │   └── token-bucket/status/  # Admin Groq key status dashboard
+│   │   │   └── admin/
+│   │   │       ├── sessions/       # Session list for admin panel
+│   │   │       ├── sessions/[id]/message/   # Admin sends message
+│   │   │       ├── sessions/[id]/resume/    # Admin resumes AI
+│   │   │       └── notifications/stream/    # Admin SSE for handoff alerts
+│   │   ├── rag/
+│   │   │   ├── retriever.ts        # Hybrid semantic + keyword search
+│   │   │   ├── embedding-provider.ts  # OpenAI/Voyage/Mock providers
+│   │   │   ├── chunker.ts          # PDF → text chunks (MAX_CHUNK_CHARS=600)
+│   │   │   └── dedup-cache.ts      # Prevents double-retrieval in same turn
+│   │   ├── integrations/
+│   │   │   └── tashus-adapter/
+│   │   │       ├── client.ts       # HTTP client with Redis cache, allow-list
+│   │   │       ├── endpoints.ts    # GET-only endpoint implementations
+│   │   │       ├── filter-engine.ts # MaskedVehicle field masking
+│   │   │       └── types.ts        # TCarDataState, MaskedVehicle types
+│   │   ├── workers/
+│   │   │   ├── run-workers.ts      # Worker entry point (Koyeb/Railway)
+│   │   │   ├── ingest-document.worker.ts  # PDF parse → chunk → embed → store
+│   │   │   └── summarize-session.worker.ts  # Rolling conversation summaries
+│   │   ├── channels/
+│   │   │   ├── process.ts          # Non-streaming message processor (email)
+│   │   │   ├── types.ts            # InboundMessageEnvelope
+│   │   │   └── email/
+│   │   │       ├── sender.ts       # nodemailer SMTP reply
+│   │   │       └── parser.ts       # SendGrid/Postmark payload parsing
+│   │   ├── db/
+│   │   │   └── client.ts           # Supabase singleton + TypeScript types
+│   │   └── lib/
+│   │       ├── redis.ts            # ioredis singleton, pub/sub, IS_WORKER flag
+│   │       ├── queue.ts            # BullMQ queue definitions + enqueue helpers
+│   │       ├── env.ts              # Zod env validation (build-phase safe)
+│   │       ├── metrics.ts          # In-memory counters
+│   │       └── logger.ts           # Structured JSON logger
+│   ├── public/
+│   │   └── widget.js               # Pre-built widget bundle (committed to git)
+│   ├── Dockerfile.worker           # Koyeb worker image
+│   ├── vercel.json                 # Route max durations (300s for SSE)
+│   └── next.config.js              # serverComponentsExternalPackages
 │
-├── components/
-│   ├── CarListing/                   # Listing wizard step components
-│   ├── Search/ReservationCheckout/   # Checkout form + voucher UI
-│   ├── Payment/                      # Stripe Elements
-│   └── UserProfileUpdated/Travels/   # Reservation management
+├── ai-admin/                      # Admin dashboard (Vercel)
+│   └── src/
+│       ├── app/(admin)/sessions/page.tsx  # Two-panel inbox UI
+│       ├── app/api/admin/sessions/        # Session CRUD + stats
+│       ├── app/api/admin/sessions/[id]/
+│       │   ├── messages/    # POST admin message
+│       │   ├── takeover/    # Activate circuit breaker
+│       │   └── release/     # Deactivate circuit breaker
+│       ├── lib/
+│       │   ├── auth.ts      # bcryptjs + jose JWT + resolveAdmin()
+│       │   ├── apiFetch.ts  # Auto-refresh 401 → redirect to login
+│       │   └── supabase.ts  # Supabase client + local file store (dev)
+│       └── middleware.ts    # JWT validation + token rotation on every request
 │
-├── context/
-│   ├── SearchProvider.tsx            # Search + availability + pricing state
-│   ├── CarListingProvider.tsx        # Host listing wizard state
-│   ├── TravelProvider.tsx            # Active reservation state
-│   └── PaymentDetailsProvider.tsx    # Payment flow state
+├── ai-widget/                     # Embeddable chat widget (Vite)
+│   └── src/
+│       ├── components/
+│       │   ├── ChatWindow.tsx      # Main chat UI
+│       │   ├── MessageBubble.tsx   # Message rendering with role-based styling
+│       │   ├── VehicleResultCard.tsx  # Vehicle card renderer
+│       │   └── Launcher.tsx        # Floating chat button + unread badge
+│       ├── hooks/
+│       │   └── useChatStream.ts    # Session init, history, SSE, polling
+│       └── lib/
+│           ├── sse-client.ts       # Backend HTTP calls + getBackendUrl()
+│           └── types.ts            # ChatMessage, StreamEvent interfaces
 │
-├── hooks/
-│   ├── car-listing/                  # Listing CRUD mutations
-│   ├── car-search/                   # Search + block-date queries
-│   ├── reservation/                  # Reservation CRUD
-│   │   └── voucher/                  # Voucher validation hooks
-│   └── payment/reservation-payment/  # Stripe intent creation
-│
-├── types/
-│   ├── car-listing/                  # Vehicle data models
-│   ├── car-search/                   # Search result types
-│   ├── travels/                      # Reservation, trip enums
-│   ├── checkout/                     # Checkout, voucher, credit
-│   ├── voucher-promotion/            # TVoucher, TPromotion
-│   └── payment/                      # Payment intent types
-│
-└── utils/Functions/
-    ├── reservationValidationFn.tsx   # Availability + price logic
-    ├── utcCommonFn.tsx               # UTC date helpers
-    └── searchCommonFn.tsx            # Notice period helpers
-```
-
-### Backend (TashusChatBot/ai-backend/src)
-```
-src/
-├── app/api/
-│   ├── admin/                              # ai-backend admin routes (parallel implementation)
-│   │   ├── sessions/route.ts               # List/search sessions
-│   │   ├── sessions/[id]/route.ts          # Session detail
-│   │   ├── sessions/[id]/message/route.ts  # Admin send message (requires admin_id in body)
-│   │   ├── sessions/[id]/resume/route.ts   # Resume AI — PUT, does NOT clear assigned_admin_id
-│   │   └── notifications/stream/route.ts   # SSE for handoff alerts
-│   └── ai/                                 # Widget-facing API
-│       ├── chat/route.ts                   # Create session + message
-│       ├── chat/stream/route.ts            # SSE streaming chat
-│       ├── chat/[sessionId]/history/route.ts # Message history
-│       ├── session/route.ts                # Session metadata
-│       ├── session/[id]/request-handoff/route.ts  # Activate circuit breaker
-│       └── session/[id]/stream/route.ts    # SSE — delivers admin messages to widget
-│
-├── agent/
-│   ├── orchestrator.ts               # Main LLM orchestration loop
-│   ├── tools.ts                      # Tool schema registry
-│   ├── tool-executor.ts              # Tool dispatch + logging
-│   ├── llm.ts                        # Multi-provider LLM caller
-│   ├── token-bucket.ts               # Rate limiting (token-based)
-│   ├── config.ts                     # Agent config loader
-│   └── prompts/system-prompt.md      # Main system prompt
-│
-├── integrations/tashus-adapter/
-│   ├── client.ts                     # HTTP client (allow-list enforced)
-│   ├── endpoints.ts                  # Typed endpoint functions
-│   ├── filter-engine.ts              # Code-level vehicle filtering
-│   └── types.ts                      # Tashus response DTOs
-│
-├── rag/
-│   ├── retriever.ts                  # Hybrid retrieval (KB + docs)
-│   ├── embedder.ts                   # OpenAI embedding wrapper
-│   └── ingestion/                    # PDF upload + chunking
-│
-├── db/
-│   ├── client.ts                     # Supabase client singleton
-│   ├── schema.sql                    # Full DDL
-│   └── migrations/                   # Version-controlled DDL changes
-│
-├── realtime/
-│   ├── redis.ts                      # Redis pub/sub client
-│   └── sse.ts                        # SSE stream helper
-│
-└── workers/
-    └── pdf-processor.ts              # Background PDF ingestion
-```
+└── DEPLOYMENT_PLAN.md             # Full deployment guide
 
 ---
 
-## 3. Database Schema — AI Ecosystem
-
-The AI chatbot uses a **completely separate Supabase PostgreSQL database** from Tashus production. No shared tables. No cross-database queries.
-
-**Schema file:** `ai-backend/src/db/schema.sql`
-
-### Core Tables
-
-#### `ai_chat_sessions`
-Tracks every conversation initiated via the widget.
-
-| Column | Type | Description |
-|---|---|---|
-| `id` | uuid | PK, auto-generated |
-| `visitor_id` | text | Anonymous ID from client localStorage |
-| `tashus_user_id` | text (nullable) | Linked only if user authenticates via Tashus JWT |
-| `tashus_user_role` | text (nullable) | 'guest' \| 'host' |
-| `channel` | text | 'widget' \| 'email' \| 'voice' \| 'social' (future) |
-| `status` | text | 'active' \| 'handed_off' \| 'closed' \| 'archived' |
-| `is_ai_paused` | boolean | **Circuit breaker** — when true, AI does NOT respond |
-| `assigned_admin_id` | uuid (nullable) | Admin user who took over (if handed off) |
-| `locale` | text | 'en-AU' default |
-| `metadata` | jsonb | { page_url, referrer, device, conversation_summary } |
-| `started_at` | timestamptz | Session creation time |
-| `last_message_at` | timestamptz | Updated on every message (used for sorting) |
-| `closed_at` | timestamptz (nullable) | When session was closed |
-
-**Indexes:**
-- `idx_sessions_status` on `status`
-- `idx_sessions_visitor` on `visitor_id`
-- `idx_sessions_assigned_admin` on `assigned_admin_id`
-- `idx_sessions_last_message` on `last_message_at DESC`
-
-
-#### `ai_chat_messages`
-Every turn in a conversation (user, assistant, admin, system, tool).
-
-| Column | Type | Description |
-|---|---|---|
-| `id` | uuid | PK |
-| `session_id` | uuid | FK → ai_chat_sessions.id |
-| `role` | text | 'user' \| 'assistant' \| 'admin' \| 'system' \| 'tool' |
-| `content` | text | Message body (plaintext or markdown) |
-| `tool_calls` | jsonb (nullable) | Structured log of tool invocations |
-| `tool_results` | jsonb (nullable) | Structured log of tool responses |
-| `sent_by_admin_id` | uuid (nullable) | If role='admin', which admin sent it |
-| `tokens_in` | int (nullable) | Input token count |
-| `tokens_out` | int (nullable) | Output token count |
-| `latency_ms` | int (nullable) | Generation latency |
-| `created_at` | timestamptz | Message timestamp |
-
-**Index:** `idx_messages_session` on `(session_id, created_at)`
-
----
-
-#### `ai_tool_call_logs`
-**Compliance proof** — every single call to the Tashus Read-Only Adapter is logged here.
-
-| Column | Type | Description |
-|---|---|---|
-| `id` | uuid | PK |
-| `session_id` | uuid (nullable) | FK → ai_chat_sessions.id |
-| `tool_name` | text | e.g. 'search_vehicles', 'get_vehicle_details' |
-| `http_method` | text | **CHECK CONSTRAINT: MUST = 'GET'** (read-only proof) |
-| `endpoint` | text | Full URL path (e.g. '/search/find-cars') |
-| `request_params` | jsonb | Query params sent |
-| `response_status` | int | HTTP status code |
-| `response_summary` | jsonb | Redacted response (never stores full payload) |
-| `cache_hit` | boolean | Whether response was served from cache |
-| `duration_ms` | int | HTTP round-trip time |
-| `tokens_in` | int (nullable) | For LLM-turn logs (not raw tool calls) |
-| `tokens_out` | int (nullable) | For LLM-turn logs |
-| `token_cost_usd` | numeric(12,8) (nullable) | Computed cost |
-| `provider` | text (nullable) | 'groq' \| 'openrouter' \| 'anthropic' |
-| `created_at` | timestamptz | Log timestamp |
-
-**Indexes:**
-- `idx_tool_logs_session` on `session_id`
-- `idx_tool_logs_created_at` on `created_at DESC`
-- `idx_tool_logs_tool_name` on `tool_name`
-- `idx_tool_logs_provider` on `(provider, created_at DESC)`
-
-**Critical:** The `http_method = 'GET'` constraint is a **database-level guarantee** that no mutating HTTP verb (POST, PUT, DELETE) can ever be logged. This makes it structurally impossible for the AI to perform write operations.
-
----
-
-#### `ai_documents` + `ai_document_chunks`
-RAG pipeline — PDF uploads chunked and embedded for semantic search.
-
-**ai_documents:**
-| Column | Type | Description |
-|---|---|---|
-| `id` | uuid | PK |
-| `title` | text | Display name |
-| `category` | text | 'rental_policy' \| 'insurance' \| 'faq_source' \| 'terms' \| 'general' |
-| `original_filename` | text | e.g. 'cancellation_policy_v2.pdf' |
-| `storage_path` | text | Path in Supabase Storage bucket `ai-documents` |
-| `mime_type` | text | 'application/pdf' |
-| `file_size_bytes` | bigint | |
-| `status` | text | 'pending' \| 'parsing' \| 'embedding' \| 'ready' \| 'failed' |
-| `error_message` | text (nullable) | If status='failed' |
-| `uploaded_by` | uuid | FK → ai_admin_users.id |
-| `version` | int | Increments on re-upload (same title) |
-| `is_active` | boolean | Only active documents are searched |
-| `created_at` | timestamptz | |
-| `updated_at` | timestamptz | |
-
-**ai_document_chunks:**
-| Column | Type | Description |
-|---|---|---|
-| `id` | uuid | PK |
-| `document_id` | uuid | FK → ai_documents.id |
-| `chunk_index` | int | Ordinal position in document |
-| `content` | text | Prefixed with header breadcrumb (e.g. "Cancellation Policy > Late Fees: ...") |
-| `page_number` | int (nullable) | Source PDF page |
-| `token_count` | int | For context budget estimation |
-| `embedding` | vector(1536) | OpenAI text-embedding-3-small |
-| `created_at` | timestamptz | |
-
-**Index:** `idx_chunks_embedding_hnsw` — HNSW index on `embedding` using `vector_cosine_ops` for approximate nearest-neighbor search.
-
----
-
-#### `ai_knowledge_base`
-Admin-authored FAQs and instructions (highest priority in retrieval).
-
-| Column | Type | Description |
-|---|---|---|
-| `id` | uuid | PK |
-| `entry_type` | text | 'faq' \| 'instruction' \| 'promotion' \| 'override' |
-| `question` | text (nullable) | For FAQs |
-| `answer` | text | The content the AI should return |
-| `tags` | text[] | For filtering/search |
-| `priority` | int | Higher = wins ties (default 100) |
-| `embedding` | vector(1536) | Semantic search |
-| `is_active` | boolean | Only active entries are retrieved |
-| `starts_at` | timestamptz (nullable) | Delayed activation |
-| `ends_at` | timestamptz (nullable) | Expiry (for promotions) |
-| `created_by` | uuid | FK → ai_admin_users.id |
-| `updated_by` | uuid (nullable) | FK → ai_admin_users.id |
-| `created_at` | timestamptz | |
-| `updated_at` | timestamptz | |
-
-**Index:** `idx_kb_embedding_hnsw` on `embedding`
-
----
-
-#### `ai_agent_configs`
-System prompt + model settings.
-
-| Column | Type | Description |
-|---|---|---|
-| `id` | uuid | PK |
-| `config_key` | text UNIQUE | e.g. 'production', 'staging' |
-| `system_prompt` | text | Full markdown system prompt |
-| `model` | text | 'claude-sonnet-4-5' |
-| `temperature` | numeric(3,2) | 0.30 default |
-| `max_tokens` | int | 1024 default |
-| `enabled_tools` | text[] | Array of tool names (from AGENT_TOOLS registry) |
-| `is_active` | boolean | Only one active config at a time |
-| `updated_by` | uuid | FK → ai_admin_users.id |
-| `updated_at` | timestamptz | |
-
----
-
-### RAG Functions (PostgreSQL)
-
-```sql
--- Knowledge base semantic search
-create function search_knowledge_base(
-  query_embedding vector(1536),
-  similarity_threshold float default 0.75,
-  match_count int default 5
-)
-returns table (id uuid, question text, answer text, priority int, similarity float);
-
--- Document chunk semantic search
-create function search_document_chunks(
-  query_embedding vector(1536),
-  match_count int default 8
-)
-returns table (id uuid, content text, "pageNumber" int, "documentTitle" text, "documentCategory" text);
-```
-
-These are called via `supabase.rpc('search_knowledge_base', { query_embedding: [...] })` from `ai-backend/src/rag/retriever.ts`.
-
----
-
-## 4. Data Models — Tashus Production
-
-These types mirror the Tashus production MongoDB schema. The AI backend **never writes** to these — it only reads via the Read-Only Adapter.
-
-**Source files:**
-- `Tashus_Frontend_V1/src/types/car-listing/carListingTypes.ts`
-- `Tashus_Frontend_V1/src/types/travels/typeTravels.ts`
-- `Tashus_Frontend_V1/src/types/voucher-promotion/promotionTypes.ts`
-
-### 4.1 Vehicle (`CarDataState`)
-
-**MongoDB collection:** `carListings` (inferred from API responses)
-
-```typescript
-type CarDataState = {
-  _id: string;                        // MongoDB ObjectId
-  hostId: string;                     // Owner's userId
-  listingId: number;                  // Auto-incrementing numeric ID (unique across DB)
-  listingStatus: 'draft' | 'pending' | 'listed' | 'unlisted' | 'update' | ...;
-  carNickName: string;
-  
-  car: {
-    licensePlate: { number: string; state: string };
-    vin: string;
-    make: string;                     // e.g. 'Toyota'
-    model: string;                    // e.g. 'RAV4'
-    year: number;                     // e.g. 2022
-    color: string;                    // e.g. 'Blue'
-    carType: string;                  // 'SUV' | 'Sedan' | 'Hatchback' | 'Ute' | 'Van' | ...
-    seats: number;                    // 2–8
-    doors: number;                    // 2, 3, 4, 5
-    windows: number;
-    fuelType: string;                 // 'Petrol' | 'Diesel' | 'Electric' | 'Hybrid'
-    transmissionType: string;         // 'Manual' | 'Automatic'
-    trim: string;
-    expiry: string;                   // Registration expiry date
-    mileage: { distance: number; units: string };  // e.g. { distance: 25000, units: 'km' }
-  };
-  
-  features: string[];                 // Standard features ['Air Conditioning', 'Bluetooth', ...]
-  additionalFeatures: string[];       // Host-added features ['Roof Rails', 'Tow Bar']
-  additionalInfos: {
-    carDescription: string;           // Rich HTML text
-    guidelines: string;               // Host-provided rules
-  };
-  
-  location: {
-    pickupAddress: {
-      city: string;
-      state: string;
-      stateShortCode: string;         // 'nsw' | 'vic' | 'qld' | ...
-      country: string;
-      countryShortCode: string;       // 'au'
-      street: string;
-      postalCode?: string;
-      coordinates: [number, number];  // [lng, lat] — GeoJSON order
-    };
-    parkingInstructions: string;
-  };
-  
-  availability: CarDataAvailability;  // See §4.2
-  rates: CarDataRates;                // See §4.3
-  photos: CarDataPhotos;              // See below
-  distance: CarDataDistance;          // Usage limits
-  
-  totalTrips: number;                 // Completed bookings
-  ratingsReceivedFrom: number;        // Review count
-  totalRatings: number;               // Sum of all ratings (avg = totalRatings / ratingsReceivedFrom)
-  
-  insurancePolicies: CarDataInsuranceInfo[];
-  createdAt: string;                  // ISO date
-  updatedAt: string;
-};
-```
-
-**Photo sub-model:**
-```typescript
-type CarDataPhotos = {
-  coverPhoto: TPhoto;
-  initialConditionPhotos: TPhoto[];
-  additionalPhotos: TPhoto[];
-  vehicleInspectionPhotos: TPhoto[];
-  updatedAt: string;
-};
-
-type TPhoto = {
-  imageInfo: {
-    public_id: string;                // Cloudinary public ID
-    secure_url: string;               // HTTPS URL
-    format: string;                   // 'jpg' | 'png'
-    bytes?: number;
-    originalHeight?: number;
-    originalWidth?: number;
-  };
-  storageProvider?: string;           // 'cloudinary'
-};
-```
-
-**Distance & Fuel:**
-```typescript
-type CarDataDistance = {
-  unlimitedTravel: boolean;
-  maximumDailyDistance: number;       // km per day limit
-  additionalFeePerKilometer: number;  // AUD per km over limit
-  fuelGauges: CarDataFuelGauge[];
-  fuelEconomy?: { maxFuel: number; fuelCost: number };
-};
-```
-
----
-
-### 4.2 Availability Matrix (`CarDataAvailability`)
-
-**File:** `src/types/car-listing/carAvailabilityTypes.ts`
-
-This structure controls when a vehicle can be picked up and returned.
-
-```typescript
-type CarDataAvailability = {
-  pickupReturnHour: {
-    alwaysAvailable: boolean;         // If true, 24/7 availability (ignores customAvailability)
-    customAvailability?: {
-      dayOfWeek: 'mon' | 'tue' | 'wed' | 'thu' | 'fri' | 'sat' | 'sun';
-      availability: 'always' | 'never' | 'custom';
-      allDay: boolean;                // If true, entire day follows 'availability' status
-      checked: boolean;               // UI state flag
-      customHours: {
-        startTime: Date;              // UTC ISO string
-        endTime: Date;                // UTC ISO string
-        status: 'booked' | 'reserved' | 'free';
-      }[];
-    }[];
-  };
-  
-  noticeInAdvance: {
-    alwaysAvailableImmediately: boolean;  // If false, advance notice required
-    hoursRequired?: number;               // 1–24 hrs advance notice
-  };
-  
-  minTripDuration: {
-    noMinimum: boolean;
-    unit: 'hours' | 'days' | 'weeks';
-    shortestDuration: number;             // e.g. 3 (hours), 1 (day), 1 (week)
-  };
-  
-  maxTripDuration: {
-    noMaximum: boolean;
-    unit: 'days' | 'weeks';
-    longestDuration: number;              // e.g. 7 (days), 2 (weeks)
-  };
-};
-```
-
-**Block Dates** (fetched separately per vehicle):
-```typescript
-type TCarBlockDate = {
-  _id: string;
-  start: Date;                        // UTC ISO string
-  end: Date;                          // UTC ISO string
-  title: string;                      // e.g. 'Blocked', 'Personal Use'
-  createdAt: Date;
-};
-
-// API response split:
-type TBlockDatesResponse = {
-  allDayList: TCarBlockDate[];        // start is 00:00:00 UTC, end is 23:59:59 UTC
-  customList: TCarBlockDate[];        // specific hour ranges
-};
-```
-
-**Critical:** The frontend validates every booking request against:
-1. `customAvailability` (per-day, per-slot)
-2. `allDayList` + `customList` (blocked windows)
-3. Existing confirmed/pending reservations (±29 min buffer)
-4. `noticeInAdvance.hoursRequired`
-5. `minTripDuration` + `maxTripDuration`
-
-No server-side booking creation happens without passing all 5 checks.
-
----
-
-### 4.3 Rates & Pricing (`CarDataRates`)
-
-**File:** `src/types/car-listing/carPricingTypes.ts`
-
-```typescript
-type CarDataRates = {
-  hourlyRates: { currency: string; amount: number };  // e.g. { currency: 'AUD', amount: 12.5 }
-  dailyRates:  { currency: string; amount: number };  // e.g. { currency: 'AUD', amount: 89.0 }
-  
-  // Peak pricing surcharge (e.g. weekends cost more)
-  peakIncrease: {
-    dayOfWeek: string;                // 'mon' | 'tue' | ... | 'sun'
-    increaseType: 'amount' | 'percentage';
-    amount?: number;                  // Fixed AUD increase
-    percentage?: number;              // Percentage increase (e.g. 15 = +15%)
-  }[];
-  
-  // Long-stay discounts (e.g. 7+ days = 10% off)
-  longBookingDiscounts: {
-    value: string | number;           // Threshold duration
-    unit: 'days' | 'weeks' | '';
-    percentage: string | number;      // Discount % (e.g. 10 = -10%)
-  }[];
-  
-  // Advance-booking discounts (e.g. book 7+ days ahead = 5% off)
-  advanceBookingDiscounts: {
-    value: string | number;
-    unit: 'days' | 'weeks' | '';
-    percentage: string | number;
-  }[];
-  
-  longBookingDiscountActive?: boolean;
-  advanceBookingDiscountActive?: boolean;
-  
-  // Date-specific custom pricing overrides
-  customPricing: {
-    date: string;                     // ISO date string (single day)
-    hourlyRates: number;
-    dailyRates: number;
-    updatedHourlyRates: number;       // Final computed value after adjustment
-    updatedDailyRates: number;
-    rateType?: 'F' | 'P';             // Fixed or Percentage adjustment
-    rateChange?: 'I' | 'D';           // Increase or Decrease
-  }[];
-  
-  updatedAt?: string;
-};
-```
-
-**Pricing Calculation Order:**
-1. Base duration price = `(totalDays × dailyRate) + (remainingHours × hourlyRate)`
-2. Apply `customPricing[]` overrides (replaces base rates for specific dates)
-3. Apply `peakIncrease` (for matching days in date range)
-4. Apply `longBookingDiscounts` (highest qualifying tier)
-5. Apply `advanceBookingDiscounts` (if booking is X days in future)
-6. Apply service fee (10% of total price, stored separately)
-7. Apply voucher discount (if validated, post-server-check)
-8. Apply credit discount (if user has credit balance)
-
-**Final output:** `basePrice` object with all breakdowns, passed to `POST /reservation/create`.
-
----
-
-### 4.4 Reservation (`TReservation`)
-
-**MongoDB collection:** `reservations` (inferred)
-
-**Files:** `src/types/travels/typeTravels.ts`, `travelEnums.ts`
-
-```typescript
-type TReservation = {
-  reservationId: number;              // Auto-incrementing numeric ID
-  guestId: string;                    // Guest's userId
-  hostId: string;                     // Host's userId
-  carListingId: number;               // FK → CarDataState.listingId
-  startDate: Date;                    // UTC ISO string
-  endDate: Date;                      // UTC ISO string
-  totalDurationHours: number;
-  totalDistanceKm?: number;
-  dailyDistanceKm?: number;
-  additionalDistanceFeePerKm?: number;
-  
-  basePrice: {
-    dailyPrice: number;
-    hourlyPrice: number;
-    totalPrice: number;               // Final payable amount (after all discounts/fees)
-    durationPrice: number;            // Base price before discounts
-    currency: string;                 // 'AUD'
-    serviceFeeAmount: number;         // 10% of totalPrice
-    customPrices?: CustomPricing[];
-    coverageAmount?: number;          // Insurance fee
-    gstAmount?: number;
-    hostIncome?: number;              // Host's net payout
-    totalDeliveryFee?: number;
-    totalReturnFee?: number;
-    deliveryFeeDiscount?: number;
-    returnFeeDiscount?: number;
-    payableAmount?: number;           // Amount charged to card
-    refundableAmount?: number;        // Amount to refund on cancellation
-  };
-  
-  serviceFeePercentage: number;       // e.g. 10 (= 10%)
-  depositAmount: number;              // Security deposit (AUD, held not charged)
-  
-  reservationStatus: EReservationStatus;
-  // 'pending' | 'confirmed' | 'cancelled' | 'completed' | 'cancelledByGuest' | 'cancelledByHost' | ...
-  
-  paymentStatus?: ReservationPaymentStatusEnum;
-  // 'pending' | 'pendingCharge' | 'paid' | 'refundable' | 'refunded' | 'refundedAsCredit' | ...
-  
-  paymentMethod?: TPaymentMethods;
-  // 'onlyCard' | 'onlyVoucher' | 'onlyCredit' | 'cardWithCredit' | 'cardWithVoucher' | ...
-  
-  pickupLocation: ReservationLocationState;
-  dropOffLocation: ReservationLocationState;
-  
-  discounts?: {
-    advanceBookingDiscounts?: TDiscountedPrice;
-    longBookingDiscounts?: TDiscountedPrice;
-  };
-  
-  peakIncrease?: {
-    calculatedAmount?: number;
-    increaseType?: 'percentage' | 'amount';
-    increaseAmount?: number;
-    increaseDays?: string[];          // ['sat', 'sun']
-  };
-  
-  insurance?: {
-    guestCoverageType: string;        // 'standard' | 'premium' | 'deluxe'
-    coveragePercentage: number;       // 60 | 70 | 80 | 90
-    excessFee: number;                // AUD
-  };
-  
-  additionalPaymentInfo?: {
-    cardAmountUsed?: number;
-    creditAmountUsed?: number;
-    voucherCode?: string;
-    voucherAmountUsed?: number;
-    voucherId?: string;
-    voucherUsedId?: string;           // Audit record ID in voucher.voucherUsedBy[]
-    chargeId?: string;                // Stripe charge ID
-  };
-  
-  tripInformation?: TTripInformation;
-  revisedReservations?: TRevisedReservation[];  // History of date/time changes
-  revisedVehicles?: TRevisedVehicle[];          // History of vehicle swaps
-  revisedCoverages?: TRevisedCoverage[];        // History of insurance changes
-  voucherInfo?: TVoucherInfo;
-  notes?: TReservationNote[];
-};
-```
-
-**Reservation Status Enum:**
-```typescript
-enum EReservationStatus {
-  Pending        = 'pending',
-  Confirmed      = 'confirmed',
-  Completed      = 'completed',
-  AdminCancelled = 'adminCancelled',
-  AutoCompleted  = 'autoCompleted',
-  AdminCompleted = 'adminCompleted',
-  Disputed       = 'disputed',
-  ForcedCompletion = 'forcedCompletion',
-  Cancelled      = 'cancelled',
-  CancelledByHost  = 'cancelledByHost',
-  CancelledByGuest = 'cancelledByGuest',
-}
-```
-
----
-
-### 4.5 Voucher (`TVoucher`)
-
-**MongoDB collection:** `vouchers` (inferred)
-
-**File:** `src/types/voucher-promotion/promotionTypes.ts`
-
-```typescript
-type TVoucher = {
-  _id: string;
-  promotionId: string;                // Parent TPromotion._id
-  voucherCode: string;                // Unique alphanumeric code (e.g. 'SUMMER25')
-  voucherSlug: string;                // URL-friendly slug for public landing page
-  voucherTitle: string;
-  description: string;
-  
-  // Discount configuration
-  discountType: 'fixed' | 'percentage';
-  discountAmount: number;             // Value (AUD or %)
-  maxDiscountAmount: number | null;   // Cap for percentage discounts
-  
-  // Usage limits
-  maxUsageCount: number;              // Total redemptions allowed across all users
-  maxUsagePerUser: number;            // Per-user limit
-  voucherUsageCount: number;          // Current total redemption count
-  voucherUsageAmount: number;         // Total AUD discount given out
-  
-  // Lifecycle
-  isActive: boolean;
-  isPaused: boolean;
-  isPublic: boolean;
-  isExpired: boolean;
-  activateAt?: string;                // ISO date — delayed activation
-  expiresAt: string;                  // ISO date — hard expiry
-  
-  // Eligibility rules (rules engine)
-  voucherRules: TVoucherRule[];
-  
-  // Media & metadata
-  voucherImages: { public_id: string; secure_url: string }[];
-  voucherTerms?: any;
-  applicableUserDescription?: string;
-  
-  // Usage audit
-  voucherUsedBy: {
-    userId: string;
-    amount: number;                   // AUD discount given to this user
-    reservationId: number;
-    _id: string;
-  }[];
-  
-  createdBy: string;
-  creator: { adminUserName: string; adminId: string };
-  changeLogs: ChangeLog[];
-  createdAt: string;
-  updatedAt: string;
-};
-```
-
-**Voucher Rule (eligibility engine):**
-```typescript
-type TVoucherRule = {
-  id: string;
-  field: string;        // e.g. 'carType', 'reservationDuration', 'guestTotalTrips',
-                        //      'monthOfTravel', 'isEmailVerified', 'carListingId', 'firstTravel'
-  operator: string;     // e.g. '=', '>', '>=', '<', '<=', 'in', 'contains', 'between'
-  valueSource: string;  // 'value' (static) | 'field' (dynamic)
-  value: any;           // The comparison target
-};
-```
-
-**Validation Flow:**
-1. Check `isActive`, `!isPaused`, `!isExpired`
-2. Check `activateAt <= now <= expiresAt`
-3. Check `voucherUsageCount < maxUsageCount`
-4. Check user's usage count < `maxUsagePerUser`
-5. **Evaluate ALL `voucherRules`** against `additionalData` (reservation fields + user metadata)
-   - If ANY rule fails → voucher invalid
-   - If ALL rules pass → voucher valid
-
-**Example Rules:**
-```json
-[
-  { "field": "carType", "operator": "in", "value": ["SUV", "Sedan"] },
-  { "field": "reservationDuration", "operator": ">=", "value": 72 },
-  { "field": "monthOfTravel", "operator": "=", "value": "december" },
-  { "field": "guestTotalTrips", "operator": "=", "value": 0 },
-  { "field": "isEmailVerified", "operator": "=", "value": true }
-]
-```
-
----
-
-### 4.6 Promotion (`TPromotion`)
-
-**MongoDB collection:** `promotions` (inferred)
-
-```typescript
-type TPromotion = {
-  _id: string;
-  title: string;
-  description: string;
-  totalBudget: number;                // AUD — total campaign budget
-  remainingBudget: number;            // AUD — budget remaining
-  promotionRules: TVoucherRule[];     // Top-level rules inherited by child vouchers
-  expiresAt: string;                  // ISO date
-  isExpired: boolean;
-  createdBy: string;                  // Admin userId
-  vouchers: string[];                 // Array of TVoucher._id references
-  updatedBy: { adminId: string; updatedAt: string; _id: string }[];
-  changeLogs: any[];
-  createdAt: string;
-  updatedAt: string;
-};
-```
-
-**Hierarchy:**
-- 1 Promotion → N Vouchers
-- Promotion-level rules apply to ALL child vouchers
-- Voucher-level rules are AND-combined with promotion rules
-
----
-
-## 5. Backend API Endpoints
-
-### 5.1 Frontend (Tashus Production) — Public Endpoints
-
-**Base URL:** `NEXT_PUBLIC_API_URL` (e.g. `https://services.tashus.com/api`)
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/search/find-cars` | ❌ | Search vehicles by location + dates + filters |
-| GET | `/search/find-cars/:listingId` | ❌ | Get full vehicle detail by listing ID |
-| GET | `/reservation/block-dates-by-car/:carListingId` | ❌ | Fetch blocked date windows for a vehicle |
-| GET | `/voucher/get-common-vouchers` | ❌ | Fetch publicly available vouchers |
-| GET | `/v2/voucher/slug/:voucherSlug` | ❌ | Fetch single voucher by URL slug |
-| PUT | `/search/vehicle-delivery-price/:drivingDistanceInKm` | ❌ | Calculate delivery fee by km |
-
-### 5.2 Frontend — Authenticated Endpoints
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| POST | `/listing/car-details` | ✅ | Create/update vehicle info (Step 1) |
-| PUT | `/listing/availability/:listingId` | ✅ | Save availability matrix (Step 3) |
-| PUT | `/listing/rates/:listingId` | ✅ | Save pricing rates (Step 4) |
-| POST | `/reservation/create` | ✅ | Create a new reservation |
-| GET | `/reservation/find-details/:reservationId` | ✅ | Fetch single reservation detail |
-| PUT | `/reservation/travel-cancel-by-host/:reservationId` | ✅ | Host cancels upcoming reservation |
-| POST | `/payment/stripe-element` | ✅ | Create Stripe payment intent (immediate charge) |
-| POST | `/payment/stripe-hold-with-payment` | ✅ | Create Stripe payment intent (charge + hold) |
-| POST | `/payment/stripe-hold-only` | ✅ | Create Stripe payment intent (hold only) |
-| PUT | `/v2/voucher/validate-voucher` | ✅ | Validate voucher code (current flow) |
-| POST | `/voucher/get-vouchers/:userId` | ✅ | Fetch vouchers eligible for logged-in user |
-
----
-
-### 5.3 AI Backend — Widget API
-
-**Base URL:** `NEXT_PUBLIC_APP_URL` (e.g. `http://localhost:3001` in dev, `https://ai-backend.tashus.com` in prod)
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| POST | `/api/ai/chat` | ❌ | Create session + send message (non-streaming) |
-| POST | `/api/ai/chat/stream` | ❌ | Create session + send message (SSE streaming) |
-| GET | `/api/ai/chat/:sessionId/history` | ❌ | Fetch message history for a session |
-| POST | `/api/ai/session` | ❌ | Create empty session |
-| POST | `/api/ai/session/:id/request-handoff` | ❌ | Activate circuit breaker, notify admins |
-| GET | `/api/ai/session/:id/stream` | ❌ | SSE stream — delivers admin messages to widget |
-| POST | `/api/ai/verify-tashus-token` | ❌ | Read-only verification of Tashus JWT |
-
-### 5.4 AI Backend — Admin API (ai-backend routes)
-
-These routes exist in `ai-backend` but are **not** used by the admin panel UI. They are a parallel, lower-level implementation.
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/api/admin/sessions` | ✅ | List sessions (paginated) |
-| GET | `/api/admin/sessions/:id` | ✅ | Session detail + full message thread |
-| POST | `/api/admin/sessions/:id/message` | ✅ | Admin sends a message (requires `admin_id` in body) |
-| PUT | `/api/admin/sessions/:id/resume` | ✅ | Resume AI (set `is_ai_paused=false`, does NOT clear `assigned_admin_id`) |
-| GET | `/api/admin/notifications/stream` | ✅ | SSE — broadcasts handoff alerts |
-
-### 5.5 AI Admin Panel Proxy Routes (ai-admin routes — used by the UI)
-
-These are in `ai-admin/src/app/api/admin/` and are what `sessions/page.tsx` actually calls.
-
-| Method | Endpoint | Auth | Description |
-|--------|----------|------|-------------|
-| GET | `/api/admin/sessions` | `isLocalDevMode()` / `getAdminFromRequest()` | List sessions with stats |
-| GET | `/api/admin/sessions/:id` | ✅ | Full session + messages |
-| POST | `/api/admin/sessions/:id/takeover` | ✅ | Set `is_ai_paused=true`, assign admin, publish Redis |
-| POST | `/api/admin/sessions/:id/messages` | ✅ | Send admin message (HTTP 423 if AI active) |
-| POST | `/api/admin/sessions/:id/release` | ✅ | Set `is_ai_paused=false`, clear `assigned_admin_id=null` |
-| PATCH | `/api/admin/sessions/:id` | ✅ | Set `status='closed'` |
-| GET | `/api/admin/notifications/stream` | ❌ (proxies ai-backend) | SSE for handoff alerts |
-
----
-
-## 6. AI Chatbot Architecture
-
-### 6.1 Core Components
+## 4. Deployment Architecture
 
 ```
 ┌─────────────────────────────────────────────────────────────────┐
-│                         AI WIDGET (React)                         │
-│  • Embedded iframe on Tashus pages                               │
-│  • Sends messages to /api/ai/chat/stream                         │
-│  • Listens to /api/ai/session/:id/stream for admin replies      │
-└───────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
+│  USER BROWSER                                                    │
+│  localhost:3000 (Tashus Frontend V1) or tashus.com              │
+│                                                                  │
+│  <script src="https://tashus-ai-ten.vercel.app/widget.js">      │
+│  window.tashusAiConfig = { backendUrl: "https://..." }          │
+└──────────────────────────────┬──────────────────────────────────┘
+                               │ HTTPS POST/SSE
+                               ▼
 ┌─────────────────────────────────────────────────────────────────┐
-│               AI BACKEND — /api/ai/chat/stream                   │
-│  1. Create/fetch ai_chat_sessions record                        │
-│  2. Insert ai_chat_messages (role='user')                       │
-│  3. Call orchestrator.run()                                     │
-│  4. Stream response via SSE                                     │
-└───────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
+│  VERCEL — ai-backend   tashus-ai-ten.vercel.app                 │
+│                                                                  │
+│  /api/ai/chat/stream     ← Main SSE stream (300s max)           │
+│  /api/ai/session         ← Create/resume session                │
+│  /api/ai/session/[id]/poll ← Widget polling every 2s           │
+│  /api/ai/health          ← Liveness probe                       │
+│  /api/admin/*            ← Proxied by ai-admin                  │
+│  GET /widget.js          ← Serves the pre-built widget bundle   │
+└────────┬─────────────────────────────────────────┬──────────────┘
+         │ Supabase SDK                            │ ioredis TLS
+         ▼                                         ▼
+┌────────────────────────┐          ┌──────────────────────────────┐
+│  SUPABASE              │          │  UPSTASH REDIS               │
+│  rdasrmihlrgpthbtoele  │          │  charmed-monitor-168160      │
+│                        │          │                              │
+│  ai_chat_sessions      │          │  agent-config:active (60s)  │
+│  ai_chat_messages      │          │  session:{id}:control (pub) │
+│  ai_admin_users        │          │  admin:notifications (pub)   │
+│  ai_documents          │          │  ratelimit:* (visitor)       │
+│  ai_document_chunks    │          │  tashus-cache:* (API cache)  │
+│  ai_knowledge_base     │          │  bull:* (BullMQ queues)      │
+│  ai_agent_configs      │          └──────────────────────────────┘
+│  ai_tool_call_logs     │
+└────────────────────────┘
+
 ┌─────────────────────────────────────────────────────────────────┐
-│                 ORCHESTRATOR (orchestrator.ts)                   │
-│  • Loads system prompt + tools from config                      │
-│  • Checks is_ai_paused flag (circuit breaker)                   │
-│  • Fetches recent message history                               │
-│  • Calls LLM provider (Claude Sonnet 4.5 primary)               │
-│  • Handles tool_use blocks:                                     │
-│    - Dispatches to executeTool()                                │
-│    - Logs to ai_tool_call_logs                                  │
-│    - Sends tool_result back to LLM                              │
-│  • Streams final assistant message back to API route            │
-│  • Inserts ai_chat_messages (role='assistant')                  │
-└───────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
+│  VERCEL — ai-admin    tashus-ai-admin.vercel.app                │
+│                                                                  │
+│  /sessions              ← Two-panel inbox                       │
+│  /documents             ← PDF upload + ingestion                │
+│  /knowledge-base        ← KB entry management                   │
+│  /api/admin/*           ← Supabase direct (no ai-backend proxy) │
+└─────────────────────────────────────────────────────────────────┘
+
 ┌─────────────────────────────────────────────────────────────────┐
-│                   TOOL EXECUTOR (tool-executor.ts)               │
-│  • Dispatches tool calls to:                                    │
-│    - Tashus Read-Only Adapter (search_vehicles, etc.)           │
-│    - RAG Retriever (search_knowledge_base)                      │
-│  • Logs every call to ai_tool_call_logs                         │
-│  • Enforces GET-only constraint at dispatch level               │
-└───────────────────────────┬─────────────────────────────────────┘
-                             │
-                             ▼
-┌─────────────────────────────────────────────────────────────────┐
-│          TASHUS READ-ONLY ADAPTER (tashus-adapter/*)             │
-│  • HTTP client with ALLOW-LIST of endpoints                     │
-│  • Typed endpoint functions (endpoints.ts)                      │
-│  • Vehicle filter engine (filter-engine.ts)                     │
-│  • Token optimization: 94% reduction on search, 90% on details  │
-│  • ALL calls logged to ai_tool_call_logs with http_method='GET'│
+│  KOYEB / RAILWAY — Worker Process (no public URL)               │
+│                                                                  │
+│  npm run worker → tsx src/workers/run-workers.ts                │
+│  ENV: WORKER_PROCESS=true                                       │
+│                                                                  │
+│  Listens on BullMQ queues via Redis:                            │
+│  • ingest-document  (PDF → chunks → embeddings → Supabase)     │
+│  • summarize-session (conversation summary every 6+ messages)  │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
----
+### Production URLs
+| Service | URL |
+|---|---|
+| AI Backend | `https://tashus-ai-ten.vercel.app` |
+| AI Admin | `https://tashus-ai-admin.vercel.app` |
+| Widget JS | `https://tashus-ai-ten.vercel.app/widget.js` |
+| Health Check | `https://tashus-ai-ten.vercel.app/api/ai/health` |
 
-### 6.2 Orchestrator Flow (`processMessageStream` in `orchestrator.ts`)
-
-```
-processMessageStream(sessionId, userText, userContext?)
-
-1. Insert user message → ai_chat_messages (role='user')
-
-2. CIRCUIT BREAKER CHECK
-   Query: is_ai_paused from ai_chat_sessions
-   If true → yield { type:'done', message:'', sources:[] } and return immediately.
-   Zero tokens spent. No LLM call.
-
-3. Load in parallel:
-   a. loadActiveAgentConfig() — system_prompt, model, enabled_tools, temperature
-   b. loadConversationState() — last 6 messages (reversed chronological) + summary
-      admin role messages are mapped to 'assistant' before being fed to the LLM
-
-4. intentNeedsRag(userText)
-   - Greetings / messages ≤3 words → false (skip RAG)
-   - Transactional keywords (book, rent, vehicle, voucher…) → false
-   - Policy keywords (cancel, insurance, fee, smoking…) → true
-   - Default → true
-
-5. If RAG needed:
-   retrieve(userText) → parallel pgvector search in ai_knowledge_base + ai_document_chunks
-   Store result in ragDedupCache(sessionId, userText, context)
-
-6. Build prompt:
-   staticSystem  = config.system_prompt              ← Groq prefix-cached (50% cost)
-   dynamicContext = [localized datetime block, conversation summary, RAG context]
-
-7. Agentic loop (max 5 rounds):
-   a. Call generateCompletionStream({ staticSystem, dynamicContext, messages, tools })
-   b. Stream 'token' chunks to caller as they arrive
-   c. On tool_use block:
-      - validateToolCall(name, args) → if invalid feed error back as tool_result, continue
-      - Check enabled_tools list
-      - For search_knowledge_base: check ragDedupCache first
-      - executeTool(name, args) → Tashus adapter or RAG retriever
-      - Log to ai_tool_call_logs (http_method='GET' enforced)
-      - Append tool_use + tool_result to loopMessages
-      - Yield tool_start, tool_result events
-   d. No tool call → break (turn complete)
-
-8. Post-turn:
-   - detectHallucinations(finalMessage, toolCalls, ragContext)
-   - Insert assistant message → ai_chat_messages
-   - Record token metrics to ai_tool_call_logs (__turn_summary__ row)
-   - Update session.last_message_at
-   - maybeEnqueueSummarization() if message count > 6
-   - yield { type:'done', message, sources }
-```
-
-**Timezone injection** (`userContext` from widget):
-```typescript
-// Widget sends: { timezone: 'Australia/Sydney', localTime: '2026-07-13T14:30:00.000Z' }
-// Injected into dynamicContext as:
-// "CURRENT USER DATE & TIME: Sunday, 13 July 2026 at 2:30 pm (AEST/AEDT)
-//  When user says 'tomorrow' → Monday, 14 July 2026..."
-```
-
-**`admin` role mapping:** Messages with `role='admin'` are remapped to `role='assistant'` before being sent to the LLM, so the model understands what the human agent said without being confused by an unknown role.
+### Vercel Function Timeouts
+| Route | Max Duration |
+|---|---|
+| `/api/ai/chat/stream` | 300s |
+| `/api/ai/session/[id]/stream` | 300s |
+| `/api/admin/notifications/stream` | 300s |
+| `/api/ai/ingest` | 120s |
+| All other routes | 10s (Hobby default) |
 
 ---
 
-### 6.3 RAG Pipeline (rag/retriever.ts)
+## 5. Database Schema
 
-**Hybrid Retrieval:**
-1. **Knowledge Base** (highest priority) — Admin-authored FAQs/instructions
-2. **Document Chunks** (fallback) — PDF embeddings
+All tables live in the `public` schema of the dedicated AI Supabase project (`rdasrmihlrgpthbtoele`). This project is **never** the Tashus main database.
 
-```typescript
-async function searchKnowledgeBaseTool(query: string) {
-  // 1. Generate embedding for query
-  const queryEmbedding = await embedText(query);  // OpenAI text-embedding-3-small
-  
-  // 2. Semantic search in KB
-  const kbResults = await db.rpc('search_knowledge_base', {
-    query_embedding: queryEmbedding,
-    similarity_threshold: 0.75,
-    match_count: 5
-  });
-  
-  // 3. Semantic search in document chunks
-  const chunkResults = await db.rpc('search_document_chunks', {
-    query_embedding: queryEmbedding,
-    match_count: 8
-  });
-  
-  // 4. Merge + priority sort
-  // KB entries always rank above document chunks (due to priority field)
-  const merged = [
-    ...kbResults.map(kb => ({ source: 'kb', priority: kb.priority, content: kb.answer, similarity: kb.similarity })),
-    ...chunkResults.map(chunk => ({ source: 'doc', priority: 0, content: chunk.content, documentTitle: chunk.documentTitle }))
-  ].sort((a, b) => b.priority - a.priority);
-  
-  // 5. Format for LLM
-  return {
-    results: merged.slice(0, 5),
-    metadata: { query, total_kb: kbResults.length, total_docs: chunkResults.length }
-  };
-}
+### `ai_chat_sessions`
+```sql
+id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+visitor_id        text NOT NULL          -- localStorage key from widget
+tashus_user_id    uuid                   -- Set if JWT passthrough verified
+tashus_user_role  text                   -- 'guest' | 'host'
+channel           text DEFAULT 'widget'  -- 'widget' | 'email' | 'voice'
+status            text DEFAULT 'active'  -- 'active' | 'handed_off' | 'closed' | 'archived'
+is_ai_paused      boolean DEFAULT false  -- Circuit breaker flag
+assigned_admin_id uuid                   -- FK to ai_admin_users when human takes over
+locale            text DEFAULT 'en'
+metadata          jsonb DEFAULT '{}'     -- Arbitrary context (page URL, etc.)
+started_at        timestamptz DEFAULT now()
+last_message_at   timestamptz DEFAULT now()
+closed_at         timestamptz
 ```
 
-**Embedding Dimensions:** 1536 (OpenAI text-embedding-3-small)
-**Similarity Metric:** Cosine similarity via pgvector `<=>` operator
-**Index:** HNSW (Hierarchical Navigable Small World) for approximate nearest-neighbor search
-
----
-
-## 7. Agent Tool Registry
-
-**File:** `ai-backend/src/agent/tools.ts`
-
-The AI agent has access to exactly **5 tools**. No dynamic tool addition. No "call any URL" escape hatch.
-
-### 7.1 `search_vehicles`
-
-**Description:** Search live Tashus vehicle inventory by location, date range, and optional filters.
-
-**Critical Instructions (from tool schema):**
-- If user has NOT specified a city or location, ASK for it — do NOT guess or fill with placeholder
-- If user has NOT specified dates, ASK for them — do NOT assume "soon", "tomorrow", etc.
-- All filtering (price, seats, type) happens server-side — pass raw criteria
-- `minSeats` is a FLOOR LIMIT (e.g. minSeats=5 returns 5, 7, 8-seater vehicles)
-- `maxPrice` is a CEILING (e.g. maxPrice=120 returns vehicles at $120/day or cheaper)
-
-**Input Schema:**
-```typescript
-{
-  // Location — at least city OR lat+long required
-  city?: string;              // e.g. "Sydney", "Melbourne"
-  country?: string;           // e.g. "au" (default)
-  region?: string;            // e.g. "nsw", "vic", "qld"
-  postcode?: string;
-  lat?: number;
-  long?: number;
-  
-  // Dates — BOTH required
-  from: string;               // ISO 8601 UTC (e.g. "2026-08-15T03:00:00.000Z")
-  to: string;                 // ISO 8601 UTC
-  
-  // Optional filters
-  cType?: 'SUV' | 'Sedan' | 'Hatchback' | 'Ute' | 'Van' | 'Convertible' | 'Coupe' | 'Wagon';
-  tType?: 'Automatic' | 'Manual';
-  fType?: 'Petrol' | 'Diesel' | 'Electric' | 'Hybrid';
-  minSeats?: number;          // Floor limit (5 = 5+ seaters)
-  maxPrice?: number;          // Ceiling (AUD daily rate)
-}
+### `ai_chat_messages`
+```sql
+id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+session_id        uuid NOT NULL REFERENCES ai_chat_sessions(id) ON DELETE CASCADE
+role              text NOT NULL  -- 'user' | 'assistant' | 'admin' | 'system' | 'tool'
+content           text NOT NULL
+tool_calls        jsonb          -- [{name, logId}] for assistant messages
+tool_results      jsonb          -- Raw tool responses
+sent_by_admin_id  uuid           -- FK to ai_admin_users when role='admin'
+tokens_in         int            -- Prompt tokens for this message
+tokens_out        int            -- Completion tokens
+latency_ms        int            -- Turn latency
+created_at        timestamptz DEFAULT now()
 ```
 
-**Returns:** `FilteredSearchResult` (~750 tokens instead of raw ~12,500 tokens)
+### `ai_admin_users`
+```sql
+id              uuid PRIMARY KEY DEFAULT gen_random_uuid()
+email           text UNIQUE NOT NULL
+password_hash   text NOT NULL          -- bcryptjs, cost=12
+display_name    text NOT NULL
+role            text DEFAULT 'agent'  -- 'super_admin' | 'admin' | 'agent' | 'viewer'
+is_active       boolean DEFAULT true
+last_login_at   timestamptz
+created_at      timestamptz DEFAULT now()
+updated_at      timestamptz DEFAULT now()
+```
 
-```typescript
-{
-  total_raw: number;          // Total vehicles fetched from API
-  total_matching: number;     // Vehicles matching filters
-  shown: MaskedSearchResult[];  // Top 5 masked vehicles
-  filters_applied: { maxPrice?: number, minSeats?: number, ... };
-}
+### `ai_admin_sessions`
+```sql
+id                  uuid PRIMARY KEY DEFAULT gen_random_uuid()
+admin_user_id       uuid NOT NULL REFERENCES ai_admin_users(id) ON DELETE CASCADE
+refresh_token_hash  text NOT NULL  -- SHA-256 of the refresh JWT
+user_agent          text
+ip_address          text
+expires_at          timestamptz NOT NULL  -- 7 days
+created_at          timestamptz DEFAULT now()
+```
 
-type MaskedSearchResult = {
-  listingId: number;
-  make: string;
-  model: string;
-  year: number;
-  carType: string;
-  transmission: string;
-  fuelType: string;
-  seats: number;
-  dailyRate: number;
-  hourlyRate: number;
-  city: string;
-  totalTrips: number;
-  rating: string;             // e.g. "4.8 (12 reviews)"
-};
+### `ai_documents`
+```sql
+id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+title             text NOT NULL
+category          text  -- 'rental_policy' | 'insurance' | 'faq_source' | 'terms' | 'general'
+original_filename text NOT NULL
+storage_path      text NOT NULL  -- Supabase Storage path: {doc_id}/{filename}
+mime_type         text DEFAULT 'application/pdf'
+file_size_bytes   int
+status            text DEFAULT 'pending'  -- 'pending'|'parsing'|'embedding'|'ready'|'failed'
+error_message     text
+uploaded_by       uuid  -- FK to ai_admin_users
+version           int DEFAULT 1
+is_active         boolean DEFAULT true
+created_at        timestamptz DEFAULT now()
+updated_at        timestamptz DEFAULT now()
+```
+
+### `ai_document_chunks`
+```sql
+id            uuid PRIMARY KEY DEFAULT gen_random_uuid()
+document_id   uuid NOT NULL REFERENCES ai_documents(id) ON DELETE CASCADE
+chunk_index   int NOT NULL
+content       text NOT NULL          -- Max ~600 chars per chunk
+page_number   int
+token_count   int
+embedding     vector(1536)           -- pgvector column, NULL if using mock embeddings
+created_at    timestamptz DEFAULT now()
+```
+
+### `ai_knowledge_base`
+```sql
+id          uuid PRIMARY KEY DEFAULT gen_random_uuid()
+entry_type  text  -- 'faq' | 'instruction' | 'promotion' | 'override'
+question    text  -- Optional Q for FAQ entries
+answer      text NOT NULL
+tags        text[]
+priority    int DEFAULT 0   -- Higher = returned first
+embedding   vector(1536)    -- NULL if mock embeddings
+is_active   boolean DEFAULT true
+starts_at   timestamptz
+ends_at     timestamptz
+created_by  uuid
+updated_by  uuid
+created_at  timestamptz DEFAULT now()
+updated_at  timestamptz DEFAULT now()
+```
+
+### `ai_agent_configs`
+```sql
+id             uuid PRIMARY KEY DEFAULT gen_random_uuid()
+config_key     text UNIQUE NOT NULL  -- 'default'
+system_prompt  text NOT NULL         -- Overridden by file at runtime
+model          text DEFAULT 'llama-3.3-70b-versatile'
+temperature    numeric DEFAULT 0.25
+max_tokens     int DEFAULT 1024
+enabled_tools  text[]  -- Tool names allowed for this config
+is_active      boolean DEFAULT true
+updated_by     uuid
+updated_at     timestamptz DEFAULT now()
+```
+
+### `ai_tool_call_logs`
+```sql
+id                uuid PRIMARY KEY DEFAULT gen_random_uuid()
+session_id        uuid
+tool_name         text NOT NULL    -- 'search_vehicles' | '__turn_summary__' | etc.
+http_method       text DEFAULT 'GET'
+endpoint          text
+request_params    jsonb
+response_status   int
+response_summary  jsonb
+cache_hit         boolean DEFAULT false
+duration_ms       int
+tokens_in         int
+tokens_out        int
+token_cost_usd    numeric(12, 8)
+provider          text             -- 'groq' | 'anthropic' | 'openrouter'
+created_at        timestamptz DEFAULT now()
 ```
 
 ---
 
-### 7.2 `get_vehicle_details`
+## 6. AI Agent Architecture
 
-**Description:** Fetch complete specifications, description, guidelines, features, host info, and usage restrictions for a specific vehicle listing ID.
+### 6.1 Request Flow (per message)
 
-**Input Schema:**
-```typescript
-{
-  listingId: number;          // Unique listing ID from search results (e.g. 1022)
-}
+```
+Widget sends message
+        │
+        ▼
+POST /api/ai/chat/stream
+  ├─ CORS check (WIDGET_ALLOWED_ORIGINS)
+  ├─ Rate limit check (Redis: ratelimit:{visitorId})
+  ├─ Session state check (is_ai_paused?)
+  │   └─ If paused → relay admin messages, do NOT call orchestrator
+  └─ Call processMessageStream(sessionId, text, userContext)
+             │
+             ▼
+        ORCHESTRATOR
+        ├─ 1. Insert user message to DB
+        ├─ 2. Keyword handoff check (regex before LLM)
+        ├─ 3. Load agent config (Redis cache, 60s TTL)
+        ├─ 4. intentNeedsRag() classifier
+        │      ├─ false → skip RAG (greetings, pure vehicle search)
+        │      └─ true  → retrieve() from pgvector / keyword fallback
+        ├─ 5. Build system prompt (static + dynamic context)
+        ├─ 6. Load conversation history (last 6 messages)
+        ├─ 7. LLM loop (max 5 rounds)
+        │      ├─ generateCompletionStream()
+        │      │   ├─ Try Groq (llama-3.3-70b-versatile) with key rotation
+        │      │   ├─ Fallback → Anthropic Claude
+        │      │   └─ Last resort → tool-aware mock
+        │      ├─ Tool call detected?
+        │      │   ├─ validateToolCall() schema check
+        │      │   ├─ executeTool() → tashus-adapter (cached)
+        │      │   └─ Feed result back into next round
+        │      └─ No tool call → stream text to widget
+        ├─ 8. Post-process: inject [VEHICLE:...] cards if search_vehicles called
+        ├─ 9. Hallucination detection
+        ├─ 10. Persist assistant message + token metrics to DB
+        ├─ 11. Update session.last_message_at
+        └─ 12. Enqueue summarization if >6 messages
 ```
 
-**Returns:** `MaskedVehicleDetails` (~500 tokens instead of raw ~5,000 tokens)
+### 6.2 intentNeedsRag() Classifier
 
-```typescript
-{
-  listingId: number;
-  make: string;
-  model: string;
-  year: number;
-  carType: string;
-  seats: number;
-  transmission: string;
-  fuelType: string;
-  mileage: { distance: number; units: string };
-  features: string[];
-  description: string;        // Stripped HTML → plaintext
-  guidelines: string;         // Stripped HTML → plaintext
-  rates: {
-    hourly: number;
-    daily: number;
-    peak_info?: string;       // e.g. "15% surcharge on weekends"
-    long_booking_discount?: string;   // e.g. "10% off for 7+ days"
-  };
-  distance_limits: {
-    unlimited: boolean;
-    daily_km?: number;
-    fee_per_extra_km?: number;
-  };
-  availability_summary: {
-    notice_hours?: number;
-    min_duration?: string;    // e.g. "3 hours"
-    max_duration?: string;    // e.g. "7 days"
-  };
-  host: {
-    firstName: string;
-    totalTrips: number;
-    rating: string;           // e.g. "4.78 (45 reviews)"
-  };
-  location: {
-    city: string;
-    street: string;
-    parking_instructions: string;
-  };
-  cover_photo_url: string;
-}
+Prevents unnecessary embedding calls for transactional/greeting messages.
+
+| Message type | RAG triggered? | Reason |
+|---|---|---|
+| "hi", "hello", ≤3 words | ❌ No | Too short |
+| "book", "rent", "available", "voucher" | ❌ No | Transactional — tool handles it |
+| "I need an SUV in Sydney" | ❌ No | Vehicle type only pattern |
+| "can I smoke in the car?" | ✅ Yes | Policy keyword match |
+| "what happens if I lose the vehicle?" | ✅ Yes | Policy keyword: `lost`, `what happens` |
+| "what is the cancellation policy?" | ✅ Yes | Policy keyword: `cancellation`, `what is` |
+| Any other 4+ word question | ✅ Yes | Default |
+
+### 6.3 System Prompt Loading
+
+The system prompt is **always loaded from the file** `src/agent/prompts/system-prompt.md`. The DB version is never used for the prompt — only for model/temperature/tools config. This ensures code changes take effect immediately without a DB update.
+
 ```
+loadActiveAgentConfig():
+  1. Read system-prompt.md from filesystem
+  2. Check Redis cache (agent-config:active, TTL 60s)
+     └─ Found: return { ...cached, system_prompt: filePrompt }
+     └─ Not found: query ai_agent_configs table
+         └─ Not found: use hardcoded fallback defaults
+  3. Cache result in Redis for 60s
+```
+
+### 6.4 Conversation Memory (Rolling Window)
+
+- Last **6 messages** loaded per turn (3 user + 3 assistant)
+- Messages older than 6 are summarized by the `summarize-session` BullMQ worker
+- Summary stored in `ai_chat_sessions.metadata.conversation_summary`
+- Summary injected into dynamic context on every turn when present
+- `admin` role messages are mapped to `assistant` role for LLM context (so AI knows what the human agent said)
+- `system` and `tool` messages are excluded from LLM context
 
 ---
 
-### 7.3 `check_availability`
+## 7. Tool Registry
 
-**Description:** Fetch block-dates for a specific vehicle listing to confirm live availability.
+All tools are **read-only**. No tool creates, modifies, or deletes any Tashus data.
 
-**Input Schema:**
-```typescript
-{
-  carListingId: number;       // Vehicle listing ID to check
-}
-```
+### Tool 1: `search_vehicles`
+- **Purpose:** Search live Tashus inventory by location, date range, and optional filters
+- **Default city:** Sydney (never asks user unless they mention another city)
+- **Default dates:** Tomorrow 9am → day after tomorrow 9am (user's local timezone)
+- **Returns:** `MaskedVehicle[]` — filtered, privacy-safe vehicle list
 
-**Returns:** `TBlockDatesResponse`
+| Parameter | Type | Required | Description |
+|---|---|---|---|
+| `city` | string | ❌ | Default: "Sydney" |
+| `from` | datetime ISO8601 | ✅ | Pickup time (UTC) |
+| `to` | datetime ISO8601 | ✅ | Return time (UTC) |
+| `cType` | enum | ❌ | SUV, Sedan, Hatchback, Ute, Van, Convertible, Coupe, Wagon |
+| `tType` | enum | ❌ | Automatic, Manual |
+| `fType` | enum | ❌ | Petrol, Diesel, Electric, Hybrid |
+| `minSeats` | number | ❌ | Floor limit — `minSeats=5` returns 5, 7, 8-seaters |
+| `maxPrice` | number | ❌ | Daily rate ceiling in AUD |
 
-```typescript
-{
-  allDayList: TCarBlockDate[];  // Full-day blocks (00:00:00 to 23:59:59 UTC)
-  customList: TCarBlockDate[];  // Specific hour ranges
-}
-
-type TCarBlockDate = {
-  _id: string;
-  start: string;                // ISO UTC date string
-  end: string;                  // ISO UTC date string
-  title: string;                // e.g. "Blocked", "Personal Use"
-  createdAt: string;
-};
-```
-
-**Usage:** After finding a vehicle the user is interested in, call this to confirm no conflicts exist for their desired dates.
-
----
-
-### 7.4 `validate_voucher`
-
-**Description:** Look up a voucher by its public slug to confirm terms and eligibility. **NEVER applies or redeems it** — read-only lookup only.
-
-**Input Schema:**
-```typescript
-{
-  voucherSlug: string;        // Voucher code slug (e.g. "SUMMER25"), case-insensitive
-}
-```
-
-**Returns:** `TVoucher` (full voucher object, see §4.5)
-
-**Usage:** User asks "What's SUMMER25?" or "Do I qualify for SUMMER25?". Agent calls this to fetch terms, discount type/amount, usage limits, and eligibility rules. Agent then explains to user (but never applies the voucher — that happens in authenticated frontend checkout flow).
-
----
-
-### 7.5 `search_knowledge_base`
-
-**Description:** Semantic search across rental policies, FAQs, and uploaded guidelines. **Only call this if the information is NOT already present in your context from the system prompt.**
-
-**Input Schema:**
-```typescript
-{
-  query: string;              // Policy or FAQ question (e.g. "What is the cancellation policy?")
-}
-```
-
-**Returns:**
-```typescript
-{
-  results: {
-    source: 'kb' | 'doc';
-    priority: number;
-    content: string;
-    similarity?: number;
-    documentTitle?: string;
-  }[];
-  metadata: {
-    query: string;
-    total_kb: number;
-    total_docs: number;
-  };
-}
-```
-
-**Usage:** User asks a policy question that's not in the system prompt. Agent searches KB + document chunks and synthesizes answer from top results.
-
----
-
-## 8. Tashus Read-Only Adapter
-
-**Files:** `ai-backend/src/integrations/tashus-adapter/*`
-
-### 8.1 Allow-List Enforcement (client.ts)
-
-```typescript
-const ALLOWED_ENDPOINTS = [
-  '/search/find-cars',                              // Search vehicles
-  '/search/find-cars/:listingId',                   // Vehicle details
-  '/reservation/block-dates-by-car/:carListingId',  // Block dates
-  '/voucher/get-common-vouchers',                   // Public vouchers
-  '/v2/voucher/slug/:voucherSlug',                  // Single voucher
-  '/search/vehicle-delivery-price/:drivingDistanceInKm'  // Delivery fee
-];
-
-async function tashusGet<T>(endpoint: string, opts: RequestOpts): Promise<T> {
-  // 1. Validate endpoint against allow-list
-  if (!isAllowedEndpoint(endpoint)) {
-    throw new Error(`Endpoint not in allow-list: ${endpoint}`);
-  }
-  
-  // 2. Build full URL
-  const url = new URL(endpoint, TASHUS_API_BASE_URL);
-  Object.entries(opts.params || {}).forEach(([k, v]) => url.searchParams.set(k, String(v)));
-  
-  // 3. Make HTTP GET request
-  const response = await fetch(url.toString(), {
-    method: 'GET',  // Hard-coded — no POST/PUT/DELETE possible
-    headers: { 'Content-Type': 'application/json' }
-  });
-  
-  // 4. Log to ai_tool_call_logs
-  await logToolCall({
-    session_id: opts.sessionId,
-    tool_name: opts.toolName,
-    http_method: 'GET',  // Enforced — satisfies DB constraint
-    endpoint,
-    request_params: opts.params,
-    response_status: response.status,
-    response_summary: { ... },
-    duration_ms: elapsed
-  });
-  
-  // 5. Return parsed JSON
-  return response.json();
-}
-```
-
-**Critical:** The `http_method` field is **hard-coded to 'GET'** at both the client and database constraint levels. This makes it **architecturally impossible** for the AI to perform write operations.
-
----
-
-### 8.2 Vehicle Filter Engine (filter-engine.ts)
-
-**Purpose:** Reduce token consumption by 94% (search) and 90% (details) via code-level filtering and masking.
-
-#### Filter Criteria
-```typescript
-type FilterCriteria = {
-  maxPrice?: number;          // AUD daily rate ceiling
-  minSeats?: number;          // Passenger capacity floor
-  vehicleType?: string;       // 'SUV' | 'Sedan' | ...
-  transmission?: string;      // 'Automatic' | 'Manual'
-  fuelType?: string;          // 'Petrol' | 'Diesel' | 'Electric' | 'Hybrid'
-};
-```
-
-#### Search Result Processing
-```typescript
-function processSearchResults(
-  rawVehicles: TSearchedCar[],
-  criteria: FilterCriteria
-): FilteredSearchResult {
-  // 1. Filter by price
-  let filtered = rawVehicles.filter(v =>
-    !criteria.maxPrice || v.rates.dailyRates.amount <= criteria.maxPrice
-  );
-  
-  // 2. Filter by seats (floor limit)
-  filtered = filtered.filter(v =>
-    !criteria.minSeats || v.car.seats >= criteria.minSeats
-  );
-  
-  // 3. Filter by vehicle type
-  filtered = filtered.filter(v =>
-    !criteria.vehicleType || v.car.carType === criteria.vehicleType
-  );
-  
-  // 4. Filter by transmission
-  filtered = filtered.filter(v =>
-    !criteria.transmission || v.car.transmissionType === criteria.transmission
-  );
-  
-  // 5. Filter by fuel type
-  filtered = filtered.filter(v =>
-    !criteria.fuelType || v.car.fuelType === criteria.fuelType
-  );
-  
-  // 6. Sort by rating (highest first)
-  filtered.sort((a, b) => {
-    const ratingA = a.ratingsReceivedFrom > 0 ? a.totalRatings / a.ratingsReceivedFrom : 0;
-    const ratingB = b.ratingsReceivedFrom > 0 ? b.totalRatings / b.ratingsReceivedFrom : 0;
-    return ratingB - ratingA;
-  });
-  
-  // 7. Take top 5
-  const top5 = filtered.slice(0, 5);
-  
-  // 8. Mask each result (keep only essential fields)
-  const masked = top5.map(maskSearchResult);
-  
-  return {
-    total_raw: rawVehicles.length,
-    total_matching: filtered.length,
-    shown: masked,
-    filters_applied: criteria
-  };
-}
-
-function maskSearchResult(vehicle: TSearchedCar): MaskedSearchResult {
-  const rating = vehicle.ratingsReceivedFrom > 0
-    ? (vehicle.totalRatings / vehicle.ratingsReceivedFrom).toFixed(1)
-    : 'New';
-  
-  return {
-    listingId: vehicle.listingId,
-    make: vehicle.car.make,
-    model: vehicle.car.model,
-    year: vehicle.car.year || 0,
-    carType: vehicle.car.carType,
-    transmission: vehicle.car.transmissionType,
-    fuelType: vehicle.car.fuelType,
-    seats: vehicle.car.seats,
-    dailyRate: vehicle.rates.dailyRates.amount,
-    hourlyRate: vehicle.rates.hourlyRates.amount,
-    city: vehicle.location.pickupAddress.city,
-    totalTrips: vehicle.totalTrips,
-    rating: vehicle.ratingsReceivedFrom > 0
-      ? `${rating} (${vehicle.ratingsReceivedFrom} reviews)`
-      : 'New listing'
-  };
-}
-```
-
-**Token Reduction:**
-- Raw `TSearchedCar[]` (30 vehicles): ~12,500 tokens
-- `FilteredSearchResult` (5 masked): ~750 tokens
-- **Savings: 94%**
-
----
-
-#### Detail Masking
-```typescript
-function maskVehicleDetails(raw: TCarDataState): MaskedVehicleDetails {
-  const hostRating = raw.hostInfo.hostRatingCount > 0
-    ? (raw.hostInfo.hostRatingTotal / raw.hostInfo.hostRatingCount).toFixed(2)
-    : 'New';
-  
-  return {
-    listingId: raw.listingId,
-    make: raw.car.make,
-    model: raw.car.model,
-    year: raw.car.year,
-    carType: raw.car.carType,
-    seats: raw.car.seats,
-    transmission: raw.car.transmissionType,
-    fuelType: raw.car.fuelType,
-    mileage: raw.car.mileage,
-    features: raw.features.slice(0, 8),  // Top 8 only
-    description: stripHtml(raw.additionalInfos.carDescription),  // Strip HTML tags
-    guidelines: stripHtml(raw.additionalInfos.guidelines),
-    rates: {
-      hourly: raw.rates.hourlyRates.amount,
-      daily: raw.rates.dailyRates.amount,
-      peak_info: summarizePeakPricing(raw.rates.peakIncrease),
-      long_booking_discount: summarizeLongDiscount(raw.rates.longBookingDiscounts)
-    },
-    distance_limits: {
-      unlimited: raw.distance.unlimitedTravel,
-      daily_km: raw.distance.unlimitedTravel ? undefined : raw.distance.maximumDailyDistance,
-      fee_per_extra_km: raw.distance.unlimitedTravel ? undefined : raw.distance.additionalFeePerKilometer
-    },
-    availability_summary: {
-      notice_hours: raw.availability.noticeInAdvance.alwaysAvailableImmediately
-        ? undefined
-        : raw.availability.noticeInAdvance.hoursRequired,
-      min_duration: raw.availability.minTripDuration.noMinimum
-        ? undefined
-        : `${raw.availability.minTripDuration.shortestDuration} ${raw.availability.minTripDuration.unit}`,
-      max_duration: raw.availability.maxTripDuration.noMaximum
-        ? undefined
-        : `${raw.availability.maxTripDuration.longestDuration} ${raw.availability.maxTripDuration.unit}`
-    },
-    host: {
-      firstName: raw.hostInfo.firstName,
-      totalTrips: raw.hostInfo.hostTotalTrips,
-      rating: raw.hostInfo.hostRatingCount > 0
-        ? `${hostRating} (${raw.hostInfo.hostRatingCount} reviews)`
-        : 'New host'
-    },
-    location: {
-      city: raw.location.pickupAddress.city,
-      street: raw.location.pickupAddress.street,
-      parking_instructions: raw.location.parkingInstructions
-    },
-    cover_photo_url: raw.photos.coverPhoto.imageInfo.secure_url
-  };
-}
-```
-
-**Token Reduction:**
-- Raw `TCarDataState`: ~5,000 tokens
-- `MaskedVehicleDetails`: ~500 tokens
-- **Savings: 90%**
-
----
-
-## 9. Service Flows — Critical Paths
-
-### 9.1 Vehicle Search & Availability Query
-
-**User Flow:**
-1. User enters location + pickup/return datetime on `/search` page
-2. Frontend calls `GET /search/find-cars?city=Sydney&from=...&to=...`
-3. Backend: geo-query `carListings` collection, filters by `listingStatus='listed'`
-4. Backend applies availability rules (pickup/return hour constraints)
-5. Returns `TSearchedCar[]` (partial projection — rates, location, car info, cover photo only)
-6. User selects a vehicle → frontend calls `GET /search/find-cars/:listingId`
-7. Backend returns full `CarDataState` (public fields) + `hostInfo`
-8. Frontend calls `GET /reservation/block-dates-by-car/:carListingId`
-9. Backend returns `TBlockDatesResponse` (allDayList + customList)
-10. Frontend splits into all-day vs. custom blocks
-11. Frontend runs `verifyConfirmReservationAvailability()` (6-step validation — see §12)
-12. If all checks pass → enable "Confirm Reservation" button
-
-**AI Chatbot Flow:**
-1. User sends "Show me SUVs in Sydney for Aug 15-18"
-2. Widget sends to `/api/ai/chat/stream`
-3. Orchestrator calls `search_vehicles` tool:
-   ```json
-   {
-     "city": "Sydney",
-     "country": "au",
-     "region": "nsw",
-     "cType": "SUV",
-     "from": "2026-08-15T03:00:00.000Z",
-     "to": "2026-08-18T03:00:00.000Z"
-   }
-   ```
-4. Adapter calls `GET /search/find-cars` with generous `pageSize=30`
-5. Filter engine applies `cType='SUV'` filter + sorts by rating
-6. Returns `FilteredSearchResult` (top 5 masked vehicles, ~750 tokens)
-7. LLM synthesizes natural language response:
-   ```
-   I found 8 SUVs available in Sydney for Aug 15-18. Here are the top 5:
-   
-   1. 2022 Toyota RAV4 — $89/day, Automatic Petrol, 5 seats
-      Rating: 4.8 (12 reviews) | 45 trips completed
-   
-   2. 2023 Mazda CX-5 — $95/day, Automatic Petrol, 5 seats
-      Rating: 4.9 (8 reviews) | 32 trips completed
-   
-   ...
-   
-   Would you like details on any of these?
-   ```
-8. User replies "Tell me about the RAV4"
-9. Orchestrator calls `get_vehicle_details` tool with `listingId=1022`
-10. Adapter calls `GET /search/find-cars/1022`
-11. Masker strips HTML, truncates features, summarizes pricing
-12. Returns `MaskedVehicleDetails` (~500 tokens)
-13. LLM synthesizes detailed response with features, guidelines, host info
-14. User asks "Is it available for my dates?"
-15. Orchestrator calls `check_availability` tool with `carListingId=1022`
-16. Adapter calls `GET /reservation/block-dates-by-car/1022`
-17. Returns block dates (none overlap with Aug 15-18)
-18. LLM confirms "Yes, it's available! Ready to book?"
-19. User says "Yes" → LLM provides deep link to Tashus checkout page with pre-filled params
-
-**Critical:** The AI **never creates the reservation**. It only provides information and a link to the authenticated frontend checkout flow.
-
----
-
-### 9.2 Reservation Creation (Frontend-Only)
-
-**This flow happens ONLY in the authenticated Tashus frontend. The AI chatbot provides information but never executes this.**
-
-```
-1. [Checkout Page] User clicks "Confirm Reservation"
-   Frontend: verifyConfirmReservationAvailability() → all 6 checks pass
-   
-2. [Checkout Page] Assemble SaveNewReservationParams:
-   {
-     guestId, hostId, carListingId, startDate, endDate,
-     basePrice: { durationPrice, serviceFeeAmount, peakIncrease, discounts, ... },
-     depositAmount, insurance, paymentMethod, additionalPaymentInfo,
-     discounts: { advanceBookingDiscounts, longBookingDiscounts },
-     peakIncrease: { increaseDays, increaseType, calculatedAmount },
-     additionalDrivers, isDeliveryEnabled, origin: 'web'
-   }
-   
-3. [Frontend] POST /reservation/create { ...params }
-   Backend: saves Reservation document, links to CarListing & User
-   Sets reservationStatus='pending', paymentStatus='pending'
-   Returns: { data: { reservationId: 10042 } }
-   
-4. [Frontend] Route based on paymentMethod:
-   
-   ├─ 'onlyVoucher' | 'onlyCredit'
-   │   └─ Redirect to /dashboard/:guestId/travels/details/:reservationId
-   │      (No card charge, immediate confirmation)
-   
-   ├─ 'onlyCreditWithHold' | 'onlyVoucherWithHold'
-   │   ├─ holdDepositCredit > 0 → /dashboard/:guestId/travels/details/:reservationId
-   │   └─ else                  → /payment/holdAmount/:reservationId?from=checkout
-   
-   └─ 'cardWithVoucher' | 'cardWithCredit' | 'onlyCard'
-       └─ Redirect to /search/:vehicleId/payment/:reservationId?from=checkout
-   
-5. [Payment Page] Stripe flow:
-   
-   ├─ Immediate charge: POST /payment/stripe-element
-   │   body: { paymentData: IPayment, price, holdPrice, email }
-   │   Returns: { clientSecret, paymentIntentId, status }
-   │   Frontend: confirmPayment() via Stripe.js
-   
-   ├─ Hold + charge: POST /payment/stripe-hold-with-payment
-   │   (Same flow, creates PaymentIntent with both amounts)
-   
-   └─ Hold only: POST /payment/stripe-hold-only
-       (Creates authorization hold, no immediate charge)
-   
-6. [Stripe Webhook] Backend receives payment_intent.succeeded
-   Updates Reservation: reservationStatus='confirmed', paymentStatus='paid'
-   
-7. [Frontend] Redirect to /dashboard/:guestId/travels/details/:reservationId
-   Displays "Booking Confirmed" with trip details
-```
-
-**AI Chatbot Role:** Provides information, answers questions, confirms availability. When user says "book it", the AI provides a deep link to the Tashus checkout page with pre-filled query params (e.g. `/search/:vehicleId/checkout?from=...&to=...`). The user must authenticate and complete the checkout flow manually.
-
----
-
-### 9.3 Voucher Validation (Frontend + AI)
-
-**Frontend Flow (Checkout):**
-```
-1. User enters voucher code "SUMMER25" in checkout form
-2. Frontend: useCheckVoucherValidation() hook
-3. PUT /v2/voucher/validate-voucher
-   body: {
-     userId, voucherCode, totalAmount,
-     additionalData: {
-       carListingId, reservationDuration,
-       travelStartDate, travelEndDate, guestEmail
-     }
-   }
-4. Backend checks:
-   a. Voucher exists, voucherCode matches (case-insensitive)
-   b. isActive=true, isPaused=false, isExpired=false
-   c. activateAt <= now <= expiresAt
-   d. voucherUsageCount < maxUsageCount
-   e. User's usage count < maxUsagePerUser
-   f. ALL voucherRules pass (rules engine against additionalData)
-      Example rules:
-      - carListingId in [allowed_ids]
-      - reservationDuration >= 72 (hours)
-      - travelStartDate.month == 'december'
-      - user.emailVerified == true
-   
-5. Backend returns:
-   {
-     success: true,
-     message: "Voucher applied successfully",
-     responseObject: {
-       isVoucherValid: true,
-       discountAmount: 40.00,
-       discountType: "percentage",
-       totalAfterDiscount: 240.50,
-       voucherCode: "SUMMER25",
-       voucherId: "64abc1234ef567890abcdef"
-     }
-   }
-   
-6. Frontend: setAppliedVoucherInfo({ ...responseObject })
-   Updates displayed total price
-   
-7. On reservation create: includes additionalPaymentInfo.voucherCode/voucherAmountUsed
-```
-
-**AI Chatbot Flow:**
-```
-1. User asks "What's SUMMER25?" or "Do I have any vouchers?"
-2. Orchestrator calls validate_voucher tool:
-   { voucherSlug: "SUMMER25" }
-3. Adapter calls GET /v2/voucher/slug/SUMMER25
-4. Returns full TVoucher object (see §4.5)
-5. LLM synthesizes:
-   "SUMMER25 gives you 20% off (max $50) on SUV and Sedan bookings
-    for trips of 3+ days in December 2026. Valid until Dec 31, 2026.
-    You've used it 0 times (limit: 1 per user)."
-6. User asks "Can I use it for the RAV4?"
-7. LLM checks voucherRules against known reservation details:
-   - carType='SUV' ✓
-   - reservationDuration=72 hrs ✓
-   - monthOfTravel='august' ✗ (rule requires 'december')
-8. LLM responds:
-   "Unfortunately, SUMMER25 only applies to December bookings.
-    Your Aug 15-18 trip doesn't qualify. Would you like to search
-    for December availability instead?"
-```
-
-**Critical:** The AI **never applies the voucher**. It only explains eligibility. Actual voucher redemption happens server-side during `POST /reservation/create` after frontend validation.
-
----
-
-### 9.4 Human Handoff Circuit Breaker
-
-**Trigger:** User says "I want to speak to a human" or agent detects escalation need.
-
-```
-1. [Widget] User clicks "Speak to a Human" button or sends message
-2. [Widget] POST /api/ai/session/:id/request-handoff
-   body: { userId?, message: "User requested human assistance" }
-3. [Backend] Updates session:
-   - is_ai_paused = true  (CIRCUIT BREAKER — AI will not respond)
-   - status = 'handed_off'
-   - metadata.handoff_reason = message
-4. [Backend] Publishes to two Redis channels:
-   - `session:{sessionId}:control` → `{ type: 'control', paused: true, message: { role: 'system', content: '🤝 Connecting...' } }`
-   - `admin:notifications` → `{ type: 'handoff_requested', session_id, visitor_id, reason, timestamp }`
-5. [Admin Dashboard] SSE listener at `/api/admin/notifications/stream`
-   Receives `handoff_requested` event → silent `fetchSessions(true)` refresh, orange badge on Handoff tab
-6. [Admin] Clicks session in list → `InlineChatPanel` loads via `GET /api/admin/sessions/:id`
-7. [Admin] Clicks "Take Over" → `POST /api/admin/sessions/:id/takeover`
-   Sets `assigned_admin_id = admin.userId` immediately on takeover (not deferred to first message)
-8. [Admin] Sends message → `POST /api/admin/sessions/:id/messages`
-   Inserts `ai_chat_messages (role='admin', sent_by_admin_id)`
-   Publishes `{ type: 'message', message: { role: 'admin', content, admin_display_name, ... } }` to `session:{id}:control`
-9. [Widget] SSE `/api/ai/session/:id/stream`
-   Receives `type: 'message'` → renders admin bubble in chat
-10. [Orchestrator] Each subsequent user message → circuit breaker check:
-    `is_ai_paused = true` → user message saved, yield `{ type: 'done' }`, return immediately
-11. [Admin] Clicks "Resume AI" → `POST /api/admin/sessions/:id/release`
-    Sets `is_ai_paused = false`, `status = 'active'`, `assigned_admin_id = null`
-    Publishes `{ type: 'control', paused: false }` to `session:{id}:control`
-12. Next user message → Orchestrator circuit breaker: `is_ai_paused = false` → normal LLM flow resumes
-```
-
-**Critical:** The `is_ai_paused` flag is checked **before every LLM call**. When true, the orchestrator immediately returns without generating a response. This is the circuit breaker that ensures human admins have full control during handoff.
-
----
-
-## 10. Payload Examples — JSON Contracts
-
-### 10.1 Create Reservation Request
-`POST /reservation/create`
-
+**Response shape (MaskedVehicle):**
 ```json
 {
-  "guestId": "64f3a1b2c8d9e00012345678",
-  "hostId": "64f3a1b2c8d9e000abcdef01",
-  "carListingId": 142,
-  "startDate": "2026-08-15T03:00:00.000Z",
-  "endDate": "2026-08-18T03:00:00.000Z",
-  "totalDurationHours": 72,
-  "totalDistanceKm": 300,
-  "dailyDistanceKm": 100,
-  "additionalDistanceFeePerKm": 0.35,
-  "depositAmount": 500,
-  "serviceFeePercentage": 10,
-  "basePrice": {
-    "dailyPrice": 85,
-    "hourlyPrice": 12,
-    "durationPrice": 255,
-    "totalPrice": 280.50,
-    "currency": "AUD",
-    "serviceFeeAmount": 28.05,
-    "coverageAmount": 0,
-    "gstAmount": 0
-  },
-  "insurance": {
-    "guestCoverageType": "standard",
-    "coveragePercentage": 70,
-    "excessFee": 1500
-  },
-  "pickupLocation": {
-    "coordinates": [151.2093, -33.8688],
-    "shortAddress": "Sydney NSW",
-    "streetAddress": "123 George St, Sydney NSW 2000"
-  },
-  "dropOffLocation": {
-    "coordinates": [151.2093, -33.8688],
-    "shortAddress": "Sydney NSW",
-    "streetAddress": "123 George St, Sydney NSW 2000"
-  },
-  "paymentMethod": "cardWithVoucher",
-  "additionalPaymentInfo": {
-    "cardAmountUsed": 240.50,
-    "voucherCode": "SUMMER25",
-    "voucherAmountUsed": 40.00,
-    "voucherId": "64abc1234ef567890abcdef",
-    "creditAmountUsed": 0
-  },
-  "discounts": {
-    "longBookingDiscounts": {
-      "calculatedAmount": 25.50,
-      "text": "10% off for 3+ days",
-      "duration": 3,
-      "durationUnit": "days",
-      "percentage": 10
-    }
-  },
-  "peakIncrease": {
-    "increaseDays": ["sat", "sun"],
-    "increaseType": "percentage",
-    "increaseAmount": 15,
-    "calculatedAmount": 25.50
-  },
-  "additionalDrivers": [],
-  "isDeliveryEnabled": false,
-  "isReturnEnabled": false,
-  "origin": "web"
-}
-```
-
----
-
-### 10.2 Voucher Validate Request (v2)
-`PUT /v2/voucher/validate-voucher`
-
-```json
-{
-  "userId": "64f3a1b2c8d9e00012345678",
-  "voucherCode": "SUMMER25",
-  "totalAmount": 280.50,
-  "additionalData": {
-    "carListingId": 142,
-    "reservationDuration": 72,
-    "travelStartDate": "2026-08-15T03:00:00.000Z",
-    "travelEndDate": "2026-08-18T03:00:00.000Z",
-    "guestEmail": "guest@example.com"
-  }
-}
-```
-
-**Response:**
-```json
-{
-  "success": true,
-  "message": "Voucher applied successfully",
-  "responseObject": {
-    "isVoucherValid": true,
-    "discountAmount": 40.00,
-    "discountType": "percentage",
-    "totalAfterDiscount": 240.50,
-    "voucherCode": "SUMMER25",
-    "voucherId": "64abc1234ef567890abcdef"
-  }
-}
-```
-
----
-
-### 10.3 Block-Dates Response
-`GET /reservation/block-dates-by-car/:carListingId`
-
-```json
-{
-  "allDayList": [
-    {
-      "_id": "64b1234567890abcdef12301",
-      "title": "Blocked",
-      "start": "2026-08-10T00:00:00.000Z",
-      "end": "2026-08-10T23:59:59.000Z",
-      "createdAt": "2026-07-01T05:00:00.000Z"
-    }
-  ],
-  "customList": [
-    {
-      "_id": "64b1234567890abcdef12302",
-      "title": "Custom Block",
-      "start": "2026-08-20T08:00:00.000Z",
-      "end": "2026-08-20T18:00:00.000Z",
-      "createdAt": "2026-07-10T05:00:00.000Z"
-    }
-  ]
-}
-```
-
----
-
-### 10.4 Search Vehicles Response (Masked)
-AI Agent Tool Result
-
-```json
-{
-  "total_raw": 30,
-  "total_matching": 8,
+  "total_matching": 5,
+  "total_raw": 12,
   "shown": [
     {
-      "listingId": 1022,
-      "make": "Toyota",
-      "model": "RAV4",
-      "year": 2022,
+      "listingId": 1004,
+      "displayName": "TOYOTA Hiace",
       "carType": "SUV",
+      "seats": 5,
       "transmission": "Automatic",
       "fuelType": "Petrol",
-      "seats": 5,
-      "dailyRate": 89.0,
-      "hourlyRate": 12.5,
-      "city": "Sydney",
-      "totalTrips": 45,
-      "rating": "4.8 (12 reviews)"
-    },
-    {
-      "listingId": 1087,
-      "make": "Mazda",
-      "model": "CX-5",
-      "year": 2023,
-      "carType": "SUV",
-      "transmission": "Automatic",
-      "fuelType": "Petrol",
-      "seats": 5,
-      "dailyRate": 95.0,
-      "hourlyRate": 13.0,
-      "city": "Sydney",
-      "totalTrips": 32,
-      "rating": "4.9 (8 reviews)"
+      "dailyRate": 50,
+      "hourlyRate": 5,
+      "location": { "city": "Sydney", "state": "New South Wales" },
+      "coverPhotoUrl": "https://res.cloudinary.com/...",
+      "hostRating": 4.6
     }
   ],
-  "filters_applied": {
-    "cType": "SUV",
-    "minSeats": null,
-    "maxPrice": null
-  }
+  "filters_applied": { "vehicleType": "SUV" }
 }
 ```
 
----
+**Post-processing in orchestrator:** When `shown.length > 0`, the orchestrator replaces the LLM's plain-text response with a structured context line + `[VEHICLE: {...}]` card tags. The widget's `MessageBubble` parses these tags and renders `VehicleResultCard` components.
 
-### 10.5 Vehicle Details Response (Masked)
-AI Agent Tool Result
+### Tool 2: `get_vehicle_details`
+- **Purpose:** Full specs, host info, features, guidelines for a specific listing
+- **Returns:** `MaskedVehicleDetails` — complete detail object
 
-```json
-{
-  "listingId": 1022,
-  "make": "Toyota",
-  "model": "RAV4",
-  "year": 2022,
-  "carType": "SUV",
-  "seats": 5,
-  "transmission": "Automatic",
-  "fuelType": "Petrol",
-  "mileage": { "distance": 25000, "units": "km" },
-  "features": [
-    "Air Conditioning",
-    "Bluetooth",
-    "GPS Navigation",
-    "Reverse Camera",
-    "Apple CarPlay",
-    "Cruise Control",
-    "Parking Sensors",
-    "USB Ports"
-  ],
-  "description": "Well-maintained 2022 Toyota RAV4 perfect for city driving and weekend adventures. Recently serviced with new tires.",
-  "guidelines": "Please return with same fuel level. No smoking. No pets. Maximum 3 additional drivers.",
-  "rates": {
-    "hourly": 12.5,
-    "daily": 89.0,
-    "peak_info": "15% surcharge on weekends (Fri-Sun)",
-    "long_booking_discount": "10% off for 7+ days"
-  },
-  "distance_limits": {
-    "unlimited": false,
-    "daily_km": 200,
-    "fee_per_extra_km": 0.35
-  },
-  "availability_summary": {
-    "notice_hours": 2,
-    "min_duration": "3 hours",
-    "max_duration": "7 days"
-  },
-  "host": {
-    "firstName": "John",
-    "totalTrips": 156,
-    "rating": "4.78 (45 reviews)"
-  },
-  "location": {
-    "city": "Sydney",
-    "street": "123 George Street",
-    "parking_instructions": "Level 2 of parking garage, bay 15. Use intercom at entrance."
-  },
-  "cover_photo_url": "https://res.cloudinary.com/tashus/image/upload/v1/vehicles/abc123.jpg"
-}
-```
-
----
-
-## 11. Frontend State Management
-
-### SearchProvider (`src/context/SearchProvider.tsx`)
-
-**Central hub for search-to-checkout flow.** Persists across vehicle search → detail → checkout → payment pages.
-
-| State Key | Type | Purpose |
+| Parameter | Type | Required |
 |---|---|---|
-| `searchParams` | `SearchParamsType` | Location + pickup/return datetime inputs |
-| `searchedCarList` | `TSearchedCar[]` | Raw API results from `/search/find-cars` |
-| `filteredCarList` | `TSearchedCar[]` | After applying frontend filters |
-| `singleCarBlockDates` | `TSingleCarBlockDate` | allDayList + customList (from block-dates API) |
-| `singleCarReservationList` | `TVehicleReservation[]` | Confirmed/pending reservations for selected vehicle |
-| `totalPrice` | `number` | Final computed price (post-discounts, post-fees) |
-| `durationPrice` | `number` | Base price before discounts/fees |
-| `peakIncPrice` | `TPeakIncreasePrice` | Peak surcharge breakdown |
-| `discountedPrice` | `DiscountedPriceType` | long + advance discount breakdown |
-| `serviceFee` | `number` | Platform fee (10% of totalPrice) |
-| `reservationPriceList` | `ReservationPriceListType[]` | Per-day price breakdown |
-| `guestCoveragePackage` | `TGuestInsurance` | Selected insurance tier |
-| `additionalPaymentInfo` | `any` | Voucher + credit amounts |
-| `appliedVoucherInfo` | `TAppliedVoucherInfo \| null` | Validated voucher (from server) |
-| `appliedCreditInfo` | `TAppliedCreditInfo \| null` | Applied credit balance |
-| `paymentMethod` | `TPaymentMethods` | Selected payment combination |
-| `vehicleDeliveryInfo` | `VehicleDeliveryInfoState` | Delivery location + fee |
-| `guestVerificationFlags` | `TGuestVerificationFlags` | Verification status (gates checkout) |
-| `reservationCustomPriceList` | `ICustomPricing[]` | Custom per-day pricing overrides |
+| `listingId` | number | ✅ |
 
-**Key Method:** `verifyConfirmReservationAvailability()`  
-Runs **6-step validation** (see §12) before allowing checkout progression.
+### Tool 3: `check_availability`
+- **Purpose:** Block-date calendar for a specific vehicle
+- **Returns:** Array of blocked date ranges
 
----
-
-## 12. Availability Validation Logic
-
-**File:** `src/utils/Functions/reservationValidationFn.tsx`  
-**Called from:** `SearchProvider.verifyConfirmReservationAvailability()`
-
-### 6-Step Validation Sequence
-
-```typescript
-async function verifyConfirmReservationAvailability() {
-  const { 
-    pickupDateTime, returnDateTime, 
-    carAvailability, singleCarBlockDates, singleCarReservationList 
-  } = this.state;
-  
-  // STEP 1: Existing Reservation Conflict Check
-  const existingReservations = singleCarReservationList.filter(res => 
-    !['cancelledByGuest', 'cancelledByHost', 'cancelled'].includes(res.reservationStatus)
-  );
-  
-  for (const res of existingReservations) {
-    const resStart = dayjs(res.startDate).subtract(29, 'minutes');
-    const resEnd = dayjs(res.endDate).add(29, 'minutes');
-    
-    const isOverlap = 
-      dayjs(pickupDateTime).isBetween(resStart, resEnd, null, '[]') ||
-      dayjs(returnDateTime).isBetween(resStart, resEnd, null, '[]') ||
-      dayjs(res.startDate).isBetween(pickupDateTime, returnDateTime, null, '[]') ||
-      dayjs(res.endDate).isBetween(pickupDateTime, returnDateTime, null, '[]');
-    
-    if (isOverlap) {
-      this.setState({ 
-        availabilityError: 'Reserved on selected time',
-        isAvailable: false 
-      });
-      return false;
-    }
-  }
-  
-  // STEP 2: Custom Block Date Conflict Check
-  const customBlockDates = singleCarBlockDates.customList.filter(block => 
-    dayjs(block.end).isAfter(dayjs())  // Skip past blocks
-  );
-  
-  for (const block of customBlockDates) {
-    const isOverlap = 
-      dayjs(pickupDateTime).isBetween(block.start, block.end, null, '[]') ||
-      dayjs(returnDateTime).isBetween(block.start, block.end, null, '[]') ||
-      dayjs(block.start).isBetween(pickupDateTime, returnDateTime, null, '[]') ||
-      dayjs(block.end).isBetween(pickupDateTime, returnDateTime, null, '[]');
-    
-    if (isOverlap) {
-      this.setState({ 
-        availabilityError: `Unavailable on ${dayjs(block.start).format('MMM DD')}, from ${dayjs(block.start).format('HH:mm')} to ${dayjs(block.end).format('HH:mm')}`,
-        isAvailable: false 
-      });
-      return false;
-    }
-  }
-  
-  // STEP 3: Notice in Advance Check
-  if (!carAvailability.noticeInAdvance.alwaysAvailableImmediately) {
-    const hoursRequired = carAvailability.noticeInAdvance.hoursRequired;
-    const advanceTimeDiffInMin = dayjs(pickupDateTime).diff(dayjs(), 'minutes');
-    
-    if (advanceTimeDiffInMin < hoursRequired * 60) {
-      this.setState({ 
-        availabilityError: `${hoursRequired} hour(s) notice period is required`,
-        isAvailable: false 
-      });
-      return false;
-    }
-  }
-  
-  // STEP 4: Minimum Trip Duration Check
-  if (!carAvailability.minTripDuration.noMinimum) {
-    const { unit, shortestDuration } = carAvailability.minTripDuration;
-    const timeDiffHours = dayjs(returnDateTime).diff(dayjs(pickupDateTime), 'hours');
-    const timeDiffDays = dayjs(returnDateTime).diff(dayjs(pickupDateTime), 'days');
-    const timeDiffMins = dayjs(returnDateTime).diff(dayjs(pickupDateTime), 'minutes');
-    
-    let isTooShort = false;
-    if (unit === 'hours' && timeDiffHours < shortestDuration) isTooShort = true;
-    if (unit === 'days' && timeDiffDays < shortestDuration) isTooShort = true;
-    if (unit === 'weeks' && timeDiffMins < shortestDuration * 7 * 24 * 60) isTooShort = true;
-    
-    if (isTooShort) {
-      this.setState({ 
-        availabilityError: `Reservation needs to be for minimum ${shortestDuration} ${unit}`,
-        isAvailable: false 
-      });
-      return false;
-    }
-  }
-  
-  // STEP 5: Maximum Trip Duration Check
-  if (!carAvailability.maxTripDuration.noMaximum) {
-    const { unit, longestDuration } = carAvailability.maxTripDuration;
-    const timeDiffMins = dayjs(returnDateTime).diff(dayjs(pickupDateTime), 'minutes');
-    
-    let isTooLong = false;
-    if (unit === 'days' && timeDiffMins > longestDuration * 24 * 60) isTooLong = true;
-    if (unit === 'weeks' && timeDiffMins > longestDuration * 7 * 24 * 60) isTooLong = true;
-    
-    if (isTooLong) {
-      this.setState({ 
-        availabilityError: `Reservations must not exceed ${longestDuration} ${unit}`,
-        isAvailable: false 
-      });
-      return false;
-    }
-  }
-  
-  // STEP 6: Custom Pickup/Return Hour Check
-  if (!carAvailability.pickupReturnHour.alwaysAvailable) {
-    const customAvailability = carAvailability.pickupReturnHour.customAvailability;
-    
-    // Build date range between pickup and return
-    const dateRange = [];
-    let current = dayjs(pickupDateTime).startOf('day');
-    const end = dayjs(returnDateTime).startOf('day');
-    while (current.isBefore(end) || current.isSame(end, 'day')) {
-      dateRange.push(current);
-      current = current.add(1, 'day');
-    }
-    
-    // Check each date
-    for (const date of dateRange) {
-      const dayOfWeek = date.format('ddd').toLowerCase();  // 'mon', 'tue', ...
-      const rule = customAvailability.find(r => r.dayOfWeek === dayOfWeek);
-      
-      if (!rule) continue;
-      
-      if (rule.availability === 'never') {
-        this.setState({ 
-          availabilityError: `Unavailable on ${dayOfWeek}`,
-          isAvailable: false 
-        });
-        return false;
-      }
-      
-      if (rule.availability === 'custom') {
-        // Check if pickup/return time falls within a 'free' slot
-        const isPickupDay = date.isSame(dayjs(pickupDateTime), 'day');
-        const isReturnDay = date.isSame(dayjs(returnDateTime), 'day');
-        
-        if (isPickupDay) {
-          const pickupTime = dayjs(pickupDateTime);
-          const hasValidSlot = rule.customHours.some(slot => 
-            slot.status === 'free' && 
-            pickupTime.isBetween(dayjs(slot.startTime), dayjs(slot.endTime), null, '[]')
-          );
-          
-          if (!hasValidSlot) {
-            this.setState({ 
-              availabilityError: `Pickup unavailable for selected time on ${dayOfWeek}`,
-              isAvailable: false 
-            });
-            return false;
-          }
-        }
-        
-        if (isReturnDay) {
-          const returnTime = dayjs(returnDateTime);
-          const hasValidSlot = rule.customHours.some(slot => 
-            slot.status === 'free' && 
-            returnTime.isBetween(dayjs(slot.startTime), dayjs(slot.endTime), null, '[]')
-          );
-          
-          if (!hasValidSlot) {
-            this.setState({ 
-              availabilityError: `Return unavailable for selected time on ${dayOfWeek}`,
-              isAvailable: false 
-            });
-            return false;
-          }
-        }
-      }
-    }
-  }
-  
-  // ALL CHECKS PASSED
-  this.setState({ 
-    availabilityError: null,
-    isAvailable: true 
-  });
-  return true;
-}
-```
-
----
-
-## 13. Price Calculation Pipeline
-
-**File:** `src/utils/Functions/reservationValidationFn.tsx`  
-**Function:** `calculateDurationPrice2()`
-
-### Pricing Formula (Step-by-Step)
-
-```typescript
-function calculateDurationPrice2(
-  startDate: Date,
-  endDate: Date,
-  dailyRates: number,
-  hourlyRates: number,
-  peakIncrease: TPeakIncrease[],
-  longBookingDiscounts: TLongBookingDiscount[],
-  advanceBookingDiscounts: TAdvanceBookingDiscount[],
-  customPricing: ICustomPricing[]
-) {
-  // STEP 1: Base Duration Price
-  const timeDiffMins = dayjs(endDate).diff(dayjs(startDate), 'minutes');
-  const timeDiffHours = Math.floor(timeDiffMins / 60);
-  const timeDiffDays = Math.floor(timeDiffHours / 24);
-  const remainingHours = timeDiffHours % 24;
-  const remainingMins = timeDiffMins % 60;
-  
-  // Round up remaining hours if there are leftover minutes
-  const addedHours = remainingHours + (remainingMins > 0 ? 1 : 0);
-  
-  // Cap remaining hours price at daily rate (never pay more than daily for partial day)
-  const remainingHoursPrice = Math.min(addedHours * hourlyRates, dailyRates);
-  
-  let durationPrice = (timeDiffDays * dailyRates) + remainingHoursPrice;
-  
-  // Apply custom pricing overrides for specific dates
-  if (customPricing && customPricing.length > 0) {
-    let customDurationPrice = 0;
-    let current = dayjs(startDate).startOf('day');
-    const end = dayjs(endDate);
-    
-    while (current.isBefore(end)) {
-      const dateStr = current.format('YYYY-MM-DD');
-      const override = customPricing.find(cp => dayjs(cp.date).format('YYYY-MM-DD') === dateStr);
-      
-      if (override) {
-        // Use override rates for this day
-        customDurationPrice += override.updatedDailyRates;
-      } else {
-        // Use base rates
-        customDurationPrice += dailyRates;
-      }
-      
-      current = current.add(1, 'day');
-    }
-    
-    // Add remaining hours using last applicable rate
-    customDurationPrice += remainingHoursPrice;
-    durationPrice = customDurationPrice;
-  }
-  
-  let totalPrice = durationPrice;
-  
-  // STEP 2: Peak Increase
-  let peakIncreasePrice = 0;
-  if (peakIncrease && peakIncrease.length > 0) {
-    const matchedPeakDays = [];
-    let current = dayjs(startDate).startOf('day');
-    const end = dayjs(endDate).startOf('day');
-    
-    while (current.isBefore(end) || current.isSame(end, 'day')) {
-      const dayOfWeek = current.format('ddd').toLowerCase();  // 'mon', 'tue', ...
-      
-      peakIncrease.forEach(peak => {
-        if (peak.dayOfWeek === dayOfWeek || peak.increaseDays?.includes(dayOfWeek)) {
-          matchedPeakDays.push({ date: current, peak });
-        }
-      });
-      
-      current = current.add(1, 'day');
-    }
-    
-    if (matchedPeakDays.length > 0) {
-      const highestPeak = peakIncrease.reduce((max, p) => 
-        (p.increaseAmount > max.increaseAmount) ? p : max
-      );
-      
-      if (highestPeak.increaseType === 'percentage') {
-        peakIncreasePrice = dailyRates * (highestPeak.increaseAmount / 100) * matchedPeakDays.length;
-      } else {
-        peakIncreasePrice = highestPeak.increaseAmount * matchedPeakDays.length;
-      }
-      
-      totalPrice += peakIncreasePrice;
-    }
-  }
-  
-  // STEP 3: Service Fee (10% of total so far)
-  const serviceFee = totalPrice * 0.10;
-  
-  // STEP 4: Long Booking Discount
-  let longBookingDiscount = 0;
-  if (longBookingDiscounts && longBookingDiscounts.length > 0) {
-    // Convert all discounts to days for comparison
-    const normalizedDiscounts = longBookingDiscounts.map(d => ({
-      ...d,
-      convertedDays: d.unit === 'weeks' ? d.value * 7 : d.value
-    }));
-    
-    // Filter to qualifying discounts
-    const qualifyingDiscounts = normalizedDiscounts.filter(d => 
-      timeDiffDays >= d.convertedDays
-    );
-    
-    if (qualifyingDiscounts.length > 0) {
-      // Pick highest discount (longest duration requirement)
-      const highestDiscount = qualifyingDiscounts.reduce((max, d) => 
-        d.convertedDays > max.convertedDays ? d : max
-      );
-      
-      longBookingDiscount = totalPrice * (highestDiscount.percentage / 100);
-      totalPrice -= longBookingDiscount;
-    }
-  }
-  
-  // STEP 5: Advance Booking Discount
-  let advanceBookingDiscount = 0;
-  if (advanceBookingDiscounts && advanceBookingDiscounts.length > 0) {
-    const advanceTimeDiffInMin = dayjs(startDate).diff(dayjs(), 'minutes');
-    const advanceTimeDiffInDays = Math.floor(advanceTimeDiffInMin / (24 * 60));
-    
-    // Convert all discounts to days
-    const normalizedDiscounts = advanceBookingDiscounts.map(d => ({
-      ...d,
-      convertedDays: d.unit === 'weeks' ? d.value * 7 : d.value
-    }));
-    
-    // Filter to qualifying discounts
-    const qualifyingDiscounts = normalizedDiscounts.filter(d => 
-      advanceTimeDiffInDays >= d.convertedDays
-    );
-    
-    if (qualifyingDiscounts.length > 0) {
-      const highestDiscount = qualifyingDiscounts.reduce((max, d) => 
-        d.convertedDays > max.convertedDays ? d : max
-      );
-      
-      advanceBookingDiscount = totalPrice * (highestDiscount.percentage / 100);
-      totalPrice -= advanceBookingDiscount;
-    }
-  }
-  
-  return {
-    durationPrice,
-    totalPrice,
-    serviceFee,
-    peakIncreasePrice,
-    longBookingDiscount,
-    advanceBookingDiscount,
-    timeDiffDays,
-    timeDiffHours,
-    remainingHoursPrice
-  };
-}
-```
-
-### Price Breakdown Example
-
-**Scenario:** 3-day rental (Aug 15-18, 2026), $89/day base rate, 15% weekend surcharge, 10% long-booking discount
-
-```
-1. Base duration price:
-   3 days × $89 = $267.00
-
-2. Peak increase (Sat-Sun in range):
-   2 days × $89 × 15% = $26.70
-   Subtotal: $293.70
-
-3. Service fee (10%):
-   $293.70 × 10% = $29.37
-   (stored separately, not added to total yet)
-
-4. Long booking discount (3+ days):
-   $293.70 × 10% = -$29.37
-   Subtotal: $264.33
-
-5. Final total: $264.33 + $29.37 (service fee) = $293.70
-```
-
----
-
-## 14. Security & Authentication
-
-### 14.1 Frontend Auth (NextAuth v4)
-
-**Storage:**
-- Access token: `localStorage.tashus.accessToken` (JWT)
-- Refresh token: HTTP-only cookie `next-auth.session-token`
-
-**Flow:**
-1. User logs in → NextAuth validates credentials
-2. JWT generated with `{ userId, email, role }` payload
-3. Access token stored in localStorage
-4. Refresh token stored in HTTP-only cookie
-
-**Axios Interceptor (`src/utils/configs/axiosInstance.ts`):**
-```typescript
-axiosClient.interceptors.request.use((config) => {
-  const token = localStorage.getItem('tashus.accessToken');
-  if (token) {
-    config.headers.Authorization = `Bearer ${token}`;
-  } else {
-    // No token → redirect to login
-    window.location.href = `/login?return_url=${window.location.pathname}`;
-  }
-  return config;
-});
-
-axiosClient.interceptors.response.use(
-  (response) => response,
-  (error) => {
-    if (error.response?.status === 401) {
-      // Unauthorized → clear auth state
-      localStorage.removeItem('tashus.accessToken');
-      document.cookie = 'next-auth.session-token=; Max-Age=0; path=/';
-      signOut({ redirect: false });
-      window.location.href = '/';
-    }
-    return Promise.reject(error);
-  }
-);
-```
-
-**Middleware (`src/middleware.ts`):**
-```typescript
-export async function middleware(request: NextRequest) {
-  const protectedPaths = [
-    '/dashboard/:path*',
-    '/car-listing/:path*',
-    '/payment/:path*',
-    '/on-boarding/driver-verification/:path*'
-  ];
-  
-  const isProtected = protectedPaths.some(path => 
-    minimatch(request.nextUrl.pathname, path)
-  );
-  
-  if (isProtected) {
-    const token = request.cookies.get('next-auth.session-token');
-    if (!token) {
-      return NextResponse.redirect(
-        new URL(`/login?return_url=${request.nextUrl.pathname}`, request.url)
-      );
-    }
-  }
-  
-  return NextResponse.next();
-}
-```
-
----
-
-### 14.2 AI Backend Auth
-
-**Admin Routes:** Session cookie + JWT validation
-
-```typescript
-// src/lib/auth-helpers.ts
-export async function getAdminFromRequest(req: NextRequest) {
-  const sessionCookie = req.cookies.get('x-admin-session')?.value;
-  if (!sessionCookie) {
-    throw new Error('Unauthorized — no session cookie');
-  }
-  
-  // Verify Supabase session
-  const { data: { session }, error } = await supabase.auth.getSession();
-  if (error || !session) {
-    throw new Error('Invalid session');
-  }
-  
-  // Fetch admin user record
-  const { data: admin } = await supabase
-    .from('ai_admin_users')
-    .select('*')
-    .eq('id', session.user.id)
-    .single();
-  
-  if (!admin || !admin.is_active) {
-    throw new Error('Admin account inactive');
-  }
-  
-  return admin;
-}
-```
-
-**Usage:**
-```typescript
-// In /api/admin/sessions/route.ts
-export async function GET(req: NextRequest) {
-  try {
-    const admin = await getAdminFromRequest(req);
-    // ... proceed with query
-  } catch (error) {
-    return NextResponse.json({ error: error.message }, { status: 401 });
-  }
-}
-```
-
-**Local Dev Mode:**
-```typescript
-export function isLocalDevMode() {
-  return process.env.NODE_ENV === 'development' && 
-         process.env.SKIP_ADMIN_AUTH === 'true';
-}
-
-// In route handlers:
-const admin = isLocalDevMode() 
-  ? { id: 'dev-admin-id', display_name: 'Dev Admin' }
-  : await getAdminFromRequest(req);
-```
-
----
-
-### 14.3 Widget (Anonymous Access)
-
-**No authentication required** — widget API routes are public.
-
-**Visitor ID:** Generated client-side, stored in `localStorage`:
-```typescript
-const visitorId = localStorage.getItem('tashus_visitor_id') || 
-  `visitor_${Date.now()}_${Math.random().toString(36).substr(2, 9)}`;
-localStorage.setItem('tashus_visitor_id', visitorId);
-```
-
-**Tashus JWT Verification (Optional):**
-If user is authenticated on the main Tashus site, the widget can link the session:
-
-```typescript
-// POST /api/ai/verify-tashus-token
-export async function POST(req: NextRequest) {
-  const { sessionId, tashusJwt } = await req.json();
-  
-  // Verify JWT signature using Tashus JWKS endpoint (configured via TASHUS_JWT_JWKS_URL)
-  const decoded = await verifyTashusJwt(tashusJwt);
-  
-  // Update session with Tashus user info
-  await supabase
-    .from('ai_chat_sessions')
-    .update({
-      tashus_user_id: decoded.userId,
-      tashus_user_role: decoded.role  // 'guest' | 'host'
-    })
-    .eq('id', sessionId);
-  
-  return NextResponse.json({ success: true });
-}
-```
-
-**Security:** The AI backend **never stores the Tashus JWT** — only extracts `userId` and `role` for read-only linking. The env var is `TASHUS_JWT_JWKS_URL` (public JWKS endpoint), not a shared secret.
-
----
-
-## 15. Admin Chat Management System
-
-> **Full specification:** `ADMIN_CHAT_MANAGEMENT_PLAN.md`  
-> **Last code-verified:** 2026-07-13
-
-### 15.1 Architecture Overview
-
-Two separate Next.js apps share one Supabase database and one Redis bus.
-
-```
-AI WIDGET (browser)
-  POST /api/ai/session/:id/request-handoff  ──► ai-backend sets is_ai_paused=true
-  GET  /api/ai/session/:id/stream           ◄── Redis channel: session:{id}:control
-
-AI BACKEND (ai-backend)
-  Orchestrator checks is_ai_paused before every LLM call.
-  If true → user message is saved but NO AI reply is generated.
-
-AI ADMIN PANEL (ai-admin)
-  Has its own proxy routes under ai-admin/src/app/api/admin/
-  These call Supabase and Redis directly — they do NOT proxy through ai-backend.
-```
-
-**Critical:** `ai-admin` proxy routes and `ai-backend` admin routes are two separate implementations. The sessions UI (`sessions/page.tsx`) calls only the `ai-admin` proxy routes.
-
----
-
-### 15.2 Circuit Breaker (`is_ai_paused`)
-
-The `is_ai_paused` boolean on `ai_chat_sessions` is the authoritative circuit breaker.
-
-**In `orchestrator.ts` (`processMessageStream`):**
-
-```typescript
-// Checked immediately after inserting the user message:
-const { data: sessionState } = await db.from('ai_chat_sessions')
-  .select('is_ai_paused, status').eq('id', dbSessionId).single();
-
-if (sessionState?.is_ai_paused) {
-  // User message is already saved above.
-  // Yield done immediately — NO LLM call, NO assistant message inserted.
-  yield { type: 'done', message: '', sources: [] };
-  return;
-}
-```
-
-When `is_ai_paused = true`:
-- User messages are still saved to `ai_chat_messages` so the admin sees them
-- Zero tokens are spent
-- The widget stream closes with a silent `done` event
-
----
-
-### 15.3 Redis Channels
-
-Defined in `ai-backend/src/lib/redis.ts`:
-
-```typescript
-// Widget SSE channel (one per session)
-export function buildSessionControlChannel(sessionId: string): string {
-  return `session:${sessionId}:control`;
-}
-// Admin-wide notification channel (broadcast to all connected admins)
-// hardcoded: 'admin:notifications'
-```
-
-| Channel | Publisher(s) | Subscriber |
+| Parameter | Type | Required |
 |---|---|---|
-| `session:{id}:control` | `request-handoff`, `takeover`, `release`, `messages` routes | Widget SSE (`/api/ai/session/:id/stream`) |
-| `admin:notifications` | `request-handoff` route | Admin SSE (`/api/admin/notifications/stream`) |
+| `carListingId` | number | ✅ |
 
-**Payload types on `session:{id}:control`:**
+### Tool 4: `validate_voucher`
+- **Purpose:** Look up voucher eligibility, terms, discount amount
+- **Read-only** — never applies or redeems
+- **Returns:** Voucher details including discount, expiry, usage limits
 
-| `type` field | Sent by | Widget action |
+| Parameter | Type | Required |
 |---|---|---|
-| `"control"` with `paused: true` | takeover / request-handoff | Show handoff system banner |
-| `"control"` with `paused: false` | release | Show "AI resumed" system banner |
-| `"message"` | messages route | Render admin message bubble |
+| `voucherSlug` | string | ✅ |
+
+### Tool 5: `search_knowledge_base`
+- **Purpose:** Semantic search across uploaded PDF documents and manual KB entries
+- **Triggers for:** Policy questions, rule questions, "what happens if...", fee questions
+- **Never for:** Vehicle search, booking, voucher queries
+
+| Parameter | Type | Required |
+|---|---|---|
+| `query` | string | ✅ |
+
+**RAG dedup:** If `intentNeedsRag()` already ran retrieval for the same query this turn, the cached result is returned without a second embedding call (~2,000 tokens saved).
+
+### Tool 6: `escalate_to_human`
+- **Purpose:** Activate circuit breaker + notify admin panel immediately
+- **Two activation paths:**
+  1. **Keyword detection** (pre-LLM): orchestrator regex matches "human", "speak to", "live agent", etc. → bypasses LLM entirely
+  2. **Tool call** (post-LLM): LLM calls this tool when it determines escalation is needed
+
+| Parameter | Type | Required |
+|---|---|---|
+| `reason` | string | ❌ |
+
+**On activation:**
+1. Sets `is_ai_paused=true`, `status='handed_off'` in `ai_chat_sessions`
+2. Inserts system message: `"🤝 Connecting you to a human agent..."`
+3. Publishes to Redis `session:{id}:control` channel (widget receives via poll)
+4. Publishes to Redis `admin:notifications` channel (admin panel receives via SSE)
 
 ---
 
-### 15.4 Admin Panel Routes (ai-admin proxies)
+## 8. RAG Pipeline
 
-| Method | Route | Action |
-|---|---|---|
-| GET | `/api/admin/sessions` | List sessions; sort: `is_ai_paused DESC`, `last_message_at DESC` |
-| GET | `/api/admin/sessions/:id` | Session detail + full message thread |
-| POST | `/api/admin/sessions/:id/takeover` | Sets `is_ai_paused=true`, `status='handed_off'`, `assigned_admin_id=admin.userId`; inserts system message; publishes `{type:'control', paused:true}` |
-| POST | `/api/admin/sessions/:id/messages` | Inserts `role='admin'` message; requires `is_ai_paused=true` (returns HTTP 423 otherwise); publishes `{type:'message', message:{...}}` |
-| POST | `/api/admin/sessions/:id/release` | Sets `is_ai_paused=false`, `status='active'`, `assigned_admin_id=null`; inserts system message; publishes `{type:'control', paused:false}` |
-| PATCH | `/api/admin/sessions/:id` | Sets `status='closed'` |
-| GET | `/api/admin/notifications/stream` | SSE — subscribes to `admin:notifications`; sends named events (`event: handoff_requested`) |
+### 8.1 Document Ingestion (from Admin Panel or localhost)
 
-**Auth pattern in every proxy route:**
+```
+Upload PDF via /api/admin/documents (POST)
+  │
+  ├─ Insert ai_documents record (status='pending')
+  ├─ Upload file to Supabase Storage (bucket: ai-documents)
+  ├─ Update storage_path in DB
+  └─ Call POST /api/ai/ingest with documentId
+       │
+       ├─ INLINE path (within Vercel function, 120s limit):
+       │   ├─ pdf-parse → text
+       │   ├─ Chunker → ~600 char chunks with overlap
+       │   ├─ EmbeddingProvider.embed(chunks[]) → float[][]
+       │   ├─ Bulk insert to ai_document_chunks with embedding vectors
+       │   └─ Update ai_documents.status = 'ready'
+       │
+       └─ QUEUED path (fallback if inline times out):
+           └─ BullMQ: enqueue to ingest-document queue
+               └─ Worker picks up → same process above
+```
+
+### 8.2 Retrieval at Query Time
+
+```
+retrieve(query: string):
+  ├─ Generate query embedding (EmbeddingProvider)
+  │   ├─ Real key → OpenAI text-embedding-3-large (1536-dim)
+  │   └─ Dummy/missing key → MockEmbeddingProvider (deterministic hash-based)
+  │
+  ├─ Search ai_knowledge_base (pgvector cosine similarity, threshold 0.75)
+  │   └─ Returns [AUTHORITATIVE] tagged KB entries first
+  │
+  ├─ Search ai_document_chunks (pgvector, threshold 0.65)
+  │   └─ Returns [SOURCE: filename, p.N] tagged chunks
+  │
+  ├─ If embedding fails → keyword fallback (SQL ILIKE scan)
+  │   NOTE: This is 5-7x slower — fix by providing real EMBEDDING_PROVIDER_API_KEY
+  │
+  ├─ Merge results, cap at MAX_CONTEXT_TOKENS=2000
+  └─ Return { context: string, sources: RetrievalSource[] }
+```
+
+### 8.3 Embedding Provider Selection
+
 ```typescript
-async function resolveAdmin(req: Request) {
-  if (isLocalDevMode()) {
-    return { userId: 'local-dev-admin', role: 'super_admin', displayName: 'Dev Admin' };
-  }
-  return getAdminFromRequest(req);  // validates session cookie → ai_admin_users
-}
+getEmbeddingProvider():
+  isDummyKey = key is missing | starts with 'sk-dummy' | length < 20
+  
+  if (isDummyKey):
+    → MockEmbeddingProvider (works in dev AND production)
+    → Deterministic hash-based vectors, instant, no API call
+    → Semantic similarity is approximate but consistent
+  
+  if (provider === 'voyage'):
+    → VoyageEmbeddingProvider (voyage-large-2)
+  
+  else (default 'openai'):
+    → OpenAIEmbeddingProvider (text-embedding-3-large, 1536-dim)
+    → 3 retries with exponential backoff
 ```
+
+**Important:** Using mock embeddings means vectors stored in `ai_document_chunks` were generated with the mock algorithm. If you later switch to a real OpenAI key, all chunks must be re-embedded (re-ingest all documents) for semantic search to work correctly.
 
 ---
 
-### 15.5 Session Inbox UI (`/sessions`)
+## 9. LLM Provider Chain
 
-**File:** `ai-admin/src/app/(admin)/sessions/page.tsx` (all components inlined, single file)
+### 9.1 Provider Hierarchy
 
-**Layout — two panels:**
 ```
-┌──────────────────────────┬──────────────────────────────────────────────┐
-│ LEFT (width: 280px)       │ RIGHT (flex: 1)                              │
-│ bg: #0F161E               │ bg: #090D11                                  │
-│                           │                                              │
-│ [Active] [Handoff 🔴]     │  IF session selected → InlineChatPanel:      │
-│ stats strip               │    Header: visitor_id + status badge         │
-│                           │    [● AI Active] or [● Handoff Mode]         │
-│ [All Chats] [Handoff 5]   │    Buttons: [Take Over] / [▶ Resume AI]      │
-│  tabs                     │             [Close]                          │
-│                           │    ──────────────────────────────────────    │
-│ [ Search… ]               │    Message thread (scrollable)               │
-│                           │    user / assistant / admin / system roles   │
-│ Session cards:            │    ──────────────────────────────────────    │
-│  avatar + visitor_id      │    Composer (only if is_ai_paused=true):     │
-│  last message preview     │    [textarea] [Send]                         │
-│  time ago                 │                                              │
-│  orange pulsing dot if    │  IF no session selected:                     │
-│  is_ai_paused=true        │    "Select a conversation" placeholder       │
-└──────────────────────────┴──────────────────────────────────────────────┘
+generateCompletionStream():
+  ├─ Both providers mock? → tool-aware mock (development only)
+  │
+  ├─ streamWithFallback([groqFn, anthropicFn]):
+  │   ├─ TRY: Groq (llama-3.3-70b-versatile)
+  │   │   └─ Token bucket rotation across 6+ API keys
+  │   │       ├─ 429 rate limit → cooldown 65s, try next key
+  │   │       ├─ All keys cooldown → throw 'All Groq keys in cooldown'
+  │   │       └─ Success → yield tokens
+  │   │
+  │   └─ FALLBACK: Anthropic Claude
+  │       └─ Uses ANTHROPIC_API_KEY
+  │
+  └─ LAST RESORT: tool-aware mock (if all providers exhausted)
 ```
 
-**Data refresh:**
-- Tab change / search change → `fetchSessions()` (shows loading spinner)
-- SSE `handoff_requested` event → `fetchSessions(true)` (silent)
-- Auto-poll every **10 seconds** → `fetchSessions(true)` (silent)
-- After any action (takeover/release/send) → `fetch_(true)` inside `InlineChatPanel`
-- SSE reconnect: 5-second retry on `onerror`
+### 9.2 Groq Token Bucket
 
-**InlineChatPanel** polls `GET /api/admin/sessions/:id` every **3 seconds**.
+- **Model:** `llama-3.3-70b-versatile` (hardcoded — ignores `config.model` in Groq path)
+- **Keys:** Up to 7 keys supported, comma-separated in `GROK_API_KEYS`
+- **Cooldown on 429:** 65 seconds per key
+- **Cooldown on 5xx:** Short backoff
+- **Status endpoint:** `GET /api/ai/token-bucket/status`
+- **Key rotation:** Round-robin starting from next available key each request
 
-**Composer visibility:** rendered only when `is_ai_paused === true && status !== 'closed'`. When AI is active the panel shows: *"AI is active. Click Take Over to respond."*
+### 9.3 Tool-Aware Mock (Fallback of Last Resort)
 
-**Header action button:**
-- `is_ai_paused = true` → orange **`▶ Resume AI`** button calls `POST …/release`
-- `is_ai_paused = false` → orange **`Take Over`** button calls `POST …/takeover`
+When all real providers fail, the mock handles 3 cases:
+
+| Case | Detection | Response |
+|---|---|---|
+| **A — Vehicle search result** | Tool result parses as `{total_matching, shown:[]}` | Renders `[VEHICLE:...]` tags |
+| **B — Vehicle detail result** | Tool result has `listingId` + `car` fields | Renders formatted vehicle specs |
+| **C — Knowledge base result** | Content contains `[AUTHORITATIVE` or `[SOURCE:` tags | Strips tags, returns "Based on Tashus policy: ..." |
+| **First round — KB question** | `kbPattern` regex matches | Calls `search_knowledge_base` tool |
+| **First round — vehicle search** | Explicit search intent words | Calls `search_vehicles` tool |
+| **First round — details** | 4-digit ID + "detail/about/info" keywords | Calls `get_vehicle_details` tool |
 
 ---
 
-### 15.6 Handoff Lifecycle
+## 10. Human Handoff System
+
+### 10.1 Circuit Breaker State Machine
 
 ```
 ACTIVE (is_ai_paused=false)
-   │
-   │  User: "I want to speak to a human"
-   │  Widget → POST /api/ai/session/:id/request-handoff
-   ▼
-HANDED_OFF (is_ai_paused=true, status='handed_off')
-   │  → Redis admin:notifications → Admin SSE → silent list refresh
-   │  → Redis session:control    → Widget shows "🤝 Connecting..." banner
-   │
-   │  Admin opens session, clicks "Take Over"
-   │  POST /api/admin/sessions/:id/takeover
-   │  → assigned_admin_id = admin.userId (immediately on takeover)
-   │  → system message: "{Admin} has joined. AI is now paused."
-   │
-   │  Admin types replies
-   │  POST /api/admin/sessions/:id/messages  (HTTP 423 if AI not paused)
-   │  → Redis type:'message' → Widget renders admin bubble
-   │
-   │  Admin clicks "Resume AI"
-   │  POST /api/admin/sessions/:id/release
-   ▼
-ACTIVE (is_ai_paused=false, status='active', assigned_admin_id=null)
-   │  → system message: "✅ Human agent left. Tashus AI resumed."
-   │  → Redis type:'control', paused:false → Widget shows resume banner
-   │
-   │  Next user message → Orchestrator: is_ai_paused=false → normal LLM flow
+    │
+    ├─ User says "I need human support" (keyword regex)
+    │   → Orchestrator pre-LLM detection → HANDOFF
+    │
+    ├─ LLM calls escalate_to_human tool
+    │   → Orchestrator tool result handler → HANDOFF
+    │
+    └─ Admin clicks "Take Over" button
+        → POST /api/admin/sessions/[id]/takeover → HANDOFF
+
+HANDOFF (is_ai_paused=true, status='handed_off')
+    │
+    ├─ User messages are still saved to DB (admin sees them)
+    ├─ Orchestrator skips LLM entirely — no AI response
+    ├─ Widget polls /api/ai/session/[id]/poll every 2s
+    │   └─ Returns new admin + system messages since last timestamp
+    │
+    └─ Admin clicks "Resume AI"
+        → POST /api/admin/sessions/[id]/release
+
+ACTIVE (is_ai_paused=false, assigned_admin_id=null)
+    └─ AI resumes, system message inserted: "AI has resumed"
+```
+
+### 10.2 Keyword Detection Regex
+
+Pre-LLM check in `processMessageStream()`:
+```
+/\b(human|agent|person|representative|rep|staff|real person|live agent|
+live support|live chat|live help|speak to|talk to|connect me|connect with|
+escalate|handoff|hand off|transfer me|human (support|assistance|help)|
+need (human|real|live) (help|support|agent|person)|
+i want (a |an )?(human|agent|person|support)|
+(can i|i want to) (speak|talk) (to|with) (a |an )?(human|person|agent)|
+human assist)\b/i
+```
+
+### 10.3 Redis Pub/Sub Channels
+
+| Channel | Publisher | Subscriber | Payload |
+|---|---|---|---|
+| `session:{id}:control` | Orchestrator, admin routes | Widget SSE stream | `{type:'control', paused:bool, message:{...}}` |
+| `session:{id}:control` | Admin messages route | Widget 2s poll | `{type:'message', message:{id,role,content,...}}` |
+| `admin:notifications` | Orchestrator (handoff) | Admin panel SSE | `{type:'handoff_requested', session_id, visitor_id}` |
+
+---
+
+## 11. Admin Chat Management
+
+### 11.1 Two-Panel Layout
+
+```
+┌────────────────────┬────────────────────────────────────────────┐
+│ LEFT PANEL (280px) │ RIGHT PANEL (flex-1)                        │
+│ bg: #0F161E        │ bg: #090D11                                  │
+│                    │                                              │
+│ [Active: N]        │ If no session selected:                     │
+│ [Handoff: N] 🟠    │   "Select a conversation"                   │
+│                    │                                              │
+│ [All] [Handoff 🔴] │ If session selected (InlineChatPanel):      │
+│                    │   Header: visitor_id + status badge          │
+│ [Search input]     │   [● Handoff Mode] or [● AI Active]          │
+│                    │   [Take Over] or [▶ Resume AI] + [Close]    │
+│ SessionCard        │                                              │
+│  • visitor_id      │   Message thread:                           │
+│  • last message    │   user → right, teal bg                     │
+│  • orange dot if   │   assistant → left, "AI" label              │
+│    handoff         │   admin → left, orange, admin name          │
+│                    │   system → centered, muted                  │
+│ ...                │                                              │
+│                    │   Composer (only when is_ai_paused=true):   │
+│                    │   [textarea] [Send]  Enter=send             │
+└────────────────────┴────────────────────────────────────────────┘
+```
+
+### 11.2 Admin API Routes (ai-admin)
+
+| Route | Method | Auth | Action |
+|---|---|---|---|
+| `/api/admin/sessions` | GET | JWT | List sessions with stats, handoff filter |
+| `/api/admin/sessions/[id]` | GET | JWT | Full session + messages + admin names |
+| `/api/admin/sessions/[id]` | PATCH | JWT | Close session (status='closed') |
+| `/api/admin/sessions/[id]/takeover` | POST | JWT | Set is_ai_paused=true, assign admin |
+| `/api/admin/sessions/[id]/messages` | POST | JWT | Send admin message, publish to Redis |
+| `/api/admin/sessions/[id]/release` | POST | JWT | Set is_ai_paused=false, clear assignment |
+| `/api/admin/notifications/stream` | GET | JWT | SSE: handoff alerts from Redis |
+
+**Dev mode bypass:** When `NODE_ENV !== 'production'`, `resolveAdmin()` returns a hardcoded `Dev Admin` identity without requiring a JWT cookie. This is automatically disabled on Vercel (production).
+
+### 11.3 Auto-Refresh Strategy
+
+| Trigger | Method | Frequency |
+|---|---|---|
+| Tab change or search | Full `fetchSessions()` | On demand |
+| SSE `handoff_requested` | Silent `fetchSessions(true)` | Instant |
+| Auto-poll | `fetchSessions(true)` | Every 10s |
+| After admin action | `fetchSessions(true)` | After each action |
+| InlineChatPanel | `fetchDetail()` | Every 3s |
+
+---
+
+## 12. Widget Architecture
+
+### 12.1 Session Lifecycle
+
+```
+Widget mounts
+  │
+  ├─ Read visitor_id from localStorage (tashus_ai_visitor_id)
+  │   └─ Not found: generate visitor_${uuid4}, save
+  │
+  ├─ Read session_id from localStorage (tashus_ai_session_id)
+  │   └─ Found: use existing session
+  │   └─ Not found: POST /api/ai/session → new session_id, save
+  │
+  ├─ GET /api/ai/chat/{session_id}/history
+  │   └─ Returns all messages except 'tool' role
+  │   └─ Seeds seenMessageIds set for polling dedup
+  │   └─ Sets lastAdminMsgAt timestamp (latest message - 1ms)
+  │   └─ Restores is_ai_paused state from last system/admin messages
+  │
+  └─ Start 2s polling loop: GET /api/ai/session/{id}/poll?since={ts}
+      └─ Returns admin + system messages since timestamp
+      └─ Syncs is_ai_paused state
+      └─ Deduplicates via seenMessageIds Set
+```
+
+### 12.2 Message Sending (SSE Stream)
+
+```
+User sends message
+  │
+  ├─ Append user bubble immediately (optimistic UI)
+  ├─ Append empty assistant bubble (streaming: true)
+  │
+  └─ POST /api/ai/chat/stream via fetchEventSource
+      │
+      ├─ event: meta → { sessionId }
+      ├─ event: tool_start → show "Checking X..." chip
+      ├─ event: tool_result → remove tool chip
+      ├─ event: token → accumulate text in assistant bubble
+      ├─ event: paused → show handoff banner, stop streaming
+      ├─ event: done → finalize assistant message content
+      └─ event: error → show error state
+```
+
+### 12.3 Vehicle Card Rendering
+
+When the widget receives a `token` event containing `[VEHICLE: {...}]` tags, `MessageBubble` parses them with a regex and renders `VehicleResultCard` components inline:
+
+```
+Token text: "Here are some SUVs in Sydney available tomorrow:\n\n[VEHICLE: {...}] [VEHICLE: {...}]"
+
+Parsed into:
+  - Text part: "Here are some SUVs in Sydney available tomorrow:"
+  - VehicleResultCard × N (fixed height: 220px each)
+  - "View More" card if total_matching > 10
+  - Follow-up text: "Would you like to know more about any of these?"
+```
+
+Each card has:
+- Vehicle photo (fixed 90px height)
+- Price badge (bottom-right overlay)
+- Name (2-line clamp)
+- Spec pills (category, seats, transmission)
+- Location + host rating
+- "View Details →" CTA button
+
+### 12.4 Backend URL Resolution
+
+```typescript
+getBackendUrl():
+  1. window.tashusAiConfig?.backendUrl   ← Set by AIWidgetLoader before script load
+  2. __AI_BACKEND_URL__                  ← Baked in at Vite build time (VITE_AI_BACKEND_URL)
+  3. 'http://localhost:3001'             ← Development fallback
+```
+
+The `AIWidgetLoader` React component in `Tashus_Frontend_V1` sets `window.tashusAiConfig.backendUrl = process.env.NEXT_PUBLIC_AI_BACKEND_URL` before appending the `<script>` tag.
+
+---
+
+## 13. API Route Map
+
+### ai-backend Routes
+
+| Path | Method | Auth | Purpose |
+|---|---|---|---|
+| `/api/ai/session` | POST | None | Create or resume session by visitor_id |
+| `/api/ai/chat/stream` | POST | None | Main SSE stream — orchestrator entry |
+| `/api/ai/chat/[sessionId]/history` | GET | None | Load full message history (force-dynamic) |
+| `/api/ai/session/[id]/poll` | GET | None | Poll for admin/system messages since timestamp |
+| `/api/ai/session/[id]/stream` | GET | None | Redis pub/sub SSE (legacy — widget uses poll) |
+| `/api/ai/session/[id]/request-handoff` | POST | None | User-initiated handoff request |
+| `/api/ai/ingest` | POST | Internal | Trigger PDF document ingestion |
+| `/api/ai/health` | GET | None | Liveness probe: DB + Redis + TashusAPI |
+| `/api/ai/token-bucket/status` | GET | None | Groq key status |
+| `/api/ai/verify-tashus-token` | POST | None | JWT passthrough verification |
+| `/api/admin/sessions` | GET | JWT cookie | List sessions for admin panel (ai-backend parallel) |
+| `/api/admin/sessions/[id]/message` | POST | JWT cookie | Relay admin message (ai-backend parallel) |
+| `/api/admin/sessions/[id]/resume` | POST | JWT cookie | Resume AI (ai-backend parallel) |
+| `/api/admin/notifications/stream` | GET | JWT cookie | SSE: Redis admin notifications |
+
+### ai-admin Routes
+
+| Path | Purpose |
+|---|---|
+| `/login` | Admin login page |
+| `/sessions` | Two-panel session inbox |
+| `/documents` | PDF upload + ingestion management |
+| `/knowledge-base` | Manual KB entry management |
+| `/config` | Agent model/temperature config |
+| `/analytics` | Token usage + response metrics |
+| `/token-bucket` | Groq API key health dashboard |
+
+---
+
+## 14. Redis Usage Map
+
+| Key Pattern | Type | TTL | Purpose |
+|---|---|---|---|
+| `agent-config:active` | String (JSON) | 60s | Agent config cache |
+| `tashus-cache:*` | String (JSON) | 60-120s | Tashus API response cache |
+| `ratelimit:{visitorId}` | String | 60s | Per-visitor rate limit counter |
+| `session:{id}:control` | Pub/Sub channel | — | Widget SSE + admin message relay |
+| `admin:notifications` | Pub/Sub channel | — | Admin panel SSE notifications |
+| `bull:ingest-document:*` | BullMQ | Varies | PDF ingestion job queue |
+| `bull:summarize-session:*` | BullMQ | Varies | Session summarization queue |
+
+**Tashus API Cache TTLs:**
+| Endpoint | TTL |
+|---|---|
+| `/search/find-cars` | 60s |
+| `/search/find-cars/:listingId` | 90s |
+| `/reservation/block-dates-by-car/:id` | 60s |
+| `/voucher/get-common-vouchers` | 120s |
+| `/v2/voucher/slug/:slug` | 120s |
+| `/search/vehicle-delivery-price/:km` | 60s |
+
+---
+
+## 15. BullMQ Worker Jobs
+
+### Job: `ingest-document`
+- **Trigger:** `POST /api/ai/ingest` after PDF upload
+- **Concurrency:** 2
+- **Retries:** 3 (exponential: 2s, 4s, 8s)
+- **Steps:**
+  1. Fetch document record from `ai_documents`
+  2. Download PDF from Supabase Storage
+  3. `pdf-parse` → raw text
+  4. `chunker.ts` → ~600 char chunks with sentence boundary detection
+  5. `EmbeddingProvider.embed(chunks)` → float[][] (batch of 128)
+  6. Bulk insert to `ai_document_chunks` with embedding vectors
+  7. Update `ai_documents.status = 'ready'`
+
+### Job: `summarize-session`
+- **Trigger:** Orchestrator enqueues when message count > 6
+- **Concurrency:** 2
+- **Retries:** 2
+- **Priority:** 10 (low — background)
+- **Dedup:** One job per session at a time (`jobId: summarize-{sessionId}`)
+- **Steps:**
+  1. Fetch last N messages from session
+  2. Call LLM with summarization prompt
+  3. Store result in `ai_chat_sessions.metadata.conversation_summary`
+
+### Worker Process
+```
+WORKER_PROCESS=true npm run worker
+→ tsx src/workers/run-workers.ts
+→ Starts ingest + summarize workers
+→ Connects to Redis (maxRetriesPerRequest=null, lazyConnect=false)
+→ Handles SIGTERM/SIGINT gracefully
 ```
 
 ---
 
-## 16. Deployment & Configuration
+## 16. Tashus Read-Only Adapter
 
-### 16.1 Environment Variables
+The adapter enforces a strict read-only contract with the Tashus production API. All requests go through `tashus-adapter/client.ts`:
 
-**Source of truth:** `ai-backend/.env.example`
+```typescript
+// Allow-list enforcement — only these endpoints can be called
+const ALLOWED_ENDPOINTS = new Set([
+  '/search/find-cars',
+  '/search/find-cars/:listingId',
+  '/reservation/block-dates-by-car/:carListingId',
+  '/voucher/get-common-vouchers',
+  '/v2/voucher/slug/:voucherSlug',
+  '/search/vehicle-delivery-price/:drivingDistanceInKm',
+]);
 
-**Frontend (Tashus_Frontend_V1):**
-```env
-NEXT_PUBLIC_API_URL=https://services.tashus.com/api
-NEXTAUTH_URL=https://tashus.com
-NEXTAUTH_SECRET=<secret>
-NEXT_PUBLIC_STRIPE_PUBLISHABLE_KEY=pk_live_...
-STRIPE_SECRET_KEY=sk_live_...
+// GET only — no POST, PUT, DELETE, PATCH
+// Redis cache checked before every HTTP call
+// ai_tool_call_logs written after every call
 ```
 
-**AI Backend (ai-backend/.env.local):**
-```env
-# ── Supabase (dedicated AI project — NEVER the Tashus main project) ──
-SUPABASE_URL=https://your-ai-project.supabase.co
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9...
-
-# ── Redis (Upstash or self-hosted) ───────────────────────────────────
-# Used for: rate limiting, BullMQ queues, Tashus adapter cache, pub/sub
-REDIS_URL=redis://default:password@host:6379
-
-# ── LLM Provider ─────────────────────────────────────────────────────
-# Primary: Anthropic Claude
-ANTHROPIC_API_KEY=sk-ant-api03-...
-
-# Optional: Groq (xAI) as primary, comma-separated for key pool rotation
-# GROK_API_KEYS=grok-key-1,grok-key-2
-# GROK_API_BASE_URL=https://api.x.ai
-
-# ── Embedding Provider ────────────────────────────────────────────────
-EMBEDDING_PROVIDER=openai            # openai | voyage | mock
-EMBEDDING_PROVIDER_API_KEY=sk-...    # OpenAI or Voyage key
-EMBEDDING_MODEL=text-embedding-3-large
-EMBEDDING_DIMENSION=1536
-
-# ── Tashus Read-Only Adapter ──────────────────────────────────────────
-TASHUS_API_BASE_URL=https://api.tashus.com
-# TASHUS_JWT_JWKS_URL=https://api.tashus.com/.well-known/jwks.json
-
-# ── Admin Auth ────────────────────────────────────────────────────────
-# Min 32 chars. Must match ai-admin JWT_SIGNING_SECRET_ADMIN.
-# NEVER reuse Tashus NEXTAUTH_SECRET.
-JWT_SIGNING_SECRET_ADMIN=generate-a-32-char-random-secret-here
-
-# ── App ───────────────────────────────────────────────────────────────
-NODE_ENV=development
-NEXT_PUBLIC_APP_URL=http://localhost:3001
-```
-
-**AI Admin (ai-admin/.env.local):**
-```env
-NEXT_PUBLIC_AI_BACKEND_URL=http://localhost:3001   # ai-backend URL
-SUPABASE_URL=https://your-ai-project.supabase.co  # same dedicated AI project
-SUPABASE_SERVICE_ROLE_KEY=eyJhbGc...
-JWT_SIGNING_SECRET_ADMIN=<same value as ai-backend>
-# Local dev — bypass admin auth:
-SKIP_ADMIN_AUTH=true
-```
-
-**AI Widget (ai-widget):**
-```env
-VITE_AI_BACKEND_URL=https://ai-backend.tashus.com
-```
-
-**Key env notes:**
-- `GROK_API_KEYS` is a **comma-separated list** (not `GROQ_API_KEY`) — supports key pool rotation via Token Bucket Manager
-- No `DATABASE_URL` — the backend uses the Supabase client directly via `SUPABASE_URL` + `SUPABASE_SERVICE_ROLE_KEY`
-- No `UPSTASH_REDIS_REST_URL` — the backend uses `ioredis` with a standard `REDIS_URL`, not the Upstash REST API
-- `SKIP_ADMIN_AUTH=true` enables `isLocalDevMode()` in all admin proxy routes (dev only)
+**Vehicle data masking:** Raw `TCarDataState` objects are filtered through `maskVehicleDetails()` which returns only the fields safe to expose to the LLM:
+- ✅ Exposed: `listingId`, `displayName`, `carType`, `seats`, `transmission`, `fuelType`, `dailyRate`, `hourlyRate`, `location`, `coverPhotoUrl`, `hostRating`
+- ❌ Hidden: Host personal info (last name, contact details), exact GPS coordinates, financial details, internal IDs
 
 ---
 
-### 16.2 Vercel Deployment
+## 17. Token Cost Calculation
 
-**Frontend:**
-- Framework: Next.js
-- Node.js Version: 18.x
-- Build Command: `npm run build`
-- Install Command: `npm ci`
-- Output Directory: `.next`
+### 17.1 LLM Pricing (Current Providers)
 
-**AI Backend:**
-- Framework: Next.js
-- Node.js Version: 18.x
-- Build Command: `npm run build`
-- Install Command: `npm ci`
-- Output Directory: `.next`
-- **Important:** Set `maxDuration: 60` in `/api/ai/chat/stream/route.ts` for Vercel Pro
+| Provider | Model | Input (per 1M tokens) | Output (per 1M tokens) |
+|---|---|---|---|
+| **Groq** | llama-3.3-70b-versatile | $0.59 | $0.79 |
+| **Anthropic** | claude-3-5-sonnet | $3.00 | $15.00 |
+| **OpenAI** | text-embedding-3-large | $0.13 | — |
 
-**AI Admin:**
-- Framework: Next.js
-- Node.js Version: 18.x
-- Build Command: `npm run build`
-- Install Command: `npm ci`
-- Output Directory: `.next`
+**Primary path is always Groq** — Anthropic is only activated when all Groq keys are rate-limited simultaneously.
 
-**AI Widget:**
-- Framework: Vite (React)
-- Node.js Version: 18.x
-- Build Command: `npm run build`
-- Install Command: `npm ci`
-- Output Directory: `dist`
-- **Deployment:** Upload `dist/tashus-widget.js` to CDN, embed via `<script>` tag
+### 17.2 Token Budget Per Turn
 
----
+Each turn injects into the LLM context:
 
-## 17. Monitoring & Observability
+| Component | Approx Tokens | Notes |
+|---|---|---|
+| Static system prompt | ~1,200 | Loaded from file, Groq prefix-cached at 50% cost |
+| DateTime context block | ~80 | User timezone + tomorrow's date |
+| Conversation history (6 msgs) | ~300–600 | Last 3 user + 3 assistant messages |
+| Conversation summary | ~0–200 | Only when session > 6 messages |
+| RAG context (when retrieved) | ~500–2,000 | Policy/FAQ content, capped at 2,000 tokens |
+| Tool schemas (5 tools) | ~800 | Sent with every non-final round |
+| User message | ~10–50 | Typical short question |
+| **Total input (typical)** | **~2,500–4,500** | |
+| **Assistant response** | **~50–200** | Short answers + vehicle tags |
 
-### 17.1 Key Metrics
+### 17.3 Scenario Cost Analysis
 
-**AI Performance:**
-- Token consumption (input + output) per session
-- Latency per LLM call
-- Tool call frequency distribution
-- Cache hit rate
-- Provider distribution (Anthropic vs Groq)
+#### Scenario A: Simple Greeting ("hi")
+```
+Turn type: Greeting (no RAG, no tool)
+Rounds: 1
+Input tokens:  ~2,500 (system + history + user)
+Output tokens: ~50
+Cost (Groq):   (2500 × $0.59 + 50 × $0.79) / 1,000,000 = $0.0000186
+Cost per 1,000 greetings: ~$0.019
+```
 
-**System Health:**
-- Sessions created per hour
-- Messages per session (avg)
-- Handoff rate (% sessions requiring human)
-- Admin response time (time from handoff to first admin message)
-- Session duration (avg)
+#### Scenario B: Vehicle Search ("I need an SUV under $60 in Sydney")
+```
+Turn type: search_vehicles tool call (no RAG, 2 rounds)
+Round 1: LLM calls search_vehicles tool
+  Input:  ~3,200 (system + history + user + tool schemas)
+  Output: ~30 (tool call JSON)
 
-**Cost Tracking:**
-- Token cost per session (tracked in `ai_tool_call_logs.token_cost_usd`)
-- Daily/monthly aggregates by provider
-- Cost per conversation (tokens_in + tokens_out × provider rate)
+Round 2: LLM formats response with vehicle cards
+  Input:  ~3,200 + ~400 (tool result) = ~3,600
+  Output: ~60 (context line + follow-up text)
 
-### 17.2 Database Queries for Analytics
+Total input:  ~6,800 tokens
+Total output: ~90 tokens
+Cost (Groq):  (6800 × $0.59 + 90 × $0.79) / 1,000,000 = $0.0000472
+Cost per 1,000 vehicle searches: ~$0.047
+```
 
-**Daily Token Usage:**
+#### Scenario C: Knowledge Base Question ("can I smoke in the car?")
+```
+Turn type: RAG + search_knowledge_base tool (2 rounds)
+RAG pre-retrieval: ~1,500 tokens injected as dynamic context
+Round 1: LLM calls search_knowledge_base (or uses RAG context directly)
+  Input:  ~2,500 + 1,500 (RAG) + 800 (tools) = ~4,800
+  Output: ~30 (tool call)
+
+Round 2: LLM formats policy answer
+  Input:  ~4,800 + ~800 (KB result) = ~5,600
+  Output: ~150 (clear policy answer)
+
+Total input:  ~10,400 tokens
+Total output: ~180 tokens
+Cost (Groq):  (10400 × $0.59 + 180 × $0.79) / 1,000,000 = $0.0000755
+Cost per 1,000 policy questions: ~$0.076
+```
+
+#### Scenario D: Vehicle Details + Follow-up ("tell me more about the Toyota")
+```
+Turn type: get_vehicle_details tool (2 rounds)
+Round 1: LLM calls get_vehicle_details
+  Input:  ~3,500
+  Output: ~25
+
+Round 2: LLM formats structured vehicle summary
+  Input:  ~3,500 + ~1,200 (detailed vehicle JSON) = ~4,700
+  Output: ~300 (full spec table + CTA)
+
+Total input:  ~8,200 tokens
+Total output: ~325 tokens
+Cost (Groq):  (8200 × $0.59 + 325 × $0.79) / 1,000,000 = $0.0000741
+Cost per 1,000 detail lookups: ~$0.074
+```
+
+#### Scenario E: Full Conversation (10 turns, mixed queries)
+```
+Typical 10-turn conversation:
+  - 3 greetings/simple questions: 3 × $0.0000186 = $0.0000558
+  - 4 vehicle searches:           4 × $0.0000472 = $0.0001888
+  - 2 policy questions:           2 × $0.0000755 = $0.0001510
+  - 1 vehicle detail:             1 × $0.0000741 = $0.0000741
+
+Total per conversation: ~$0.0004697 (~$0.0005)
+Cost per 1,000 conversations: ~$0.47
+Cost per 10,000 conversations: ~$4.70
+```
+
+#### Scenario F: Anthropic Fallback (all Groq keys exhausted)
+```
+Same Scenario B but on Anthropic claude-3-5-sonnet:
+Input:  ~6,800 tokens × $3.00/1M   = $0.0000204
+Output: ~90 tokens   × $15.00/1M  = $0.00000135
+Total: ~$0.0000218 per turn
+
+NOTE: Anthropic is actually cheaper per turn than Groq for typical
+short conversations because Groq charges more per output token.
+Groq is preferred for throughput/speed and free-tier key rotation.
+```
+
+### 17.4 Monthly Cost Projections
+
+| Daily Active Users | Conversations/Day | Turns/Conv | Monthly Groq Cost | Monthly Anthropic (fallback) |
+|---|---|---|---|---|
+| 100 | 100 | 10 | ~$1.41 | ~$0.65 |
+| 500 | 500 | 10 | ~$7.05 | ~$3.27 |
+| 1,000 | 1,000 | 10 | ~$14.10 | ~$6.54 |
+| 5,000 | 5,000 | 10 | ~$70.50 | ~$32.70 |
+
+**Note:** Groq free tier provides ~14,400 requests/day per key × 6 keys = ~86,400 requests/day before costs. For typical usage under 86,400 daily turns, Groq is effectively **$0/month**.
+
+### 17.5 Token Tracking in Production
+
+Every turn records to `ai_tool_call_logs` with `tool_name='__turn_summary__'`:
+- `tokens_in` — total prompt tokens
+- `tokens_out` — completion tokens
+- `token_cost_usd` — calculated cost
+- `provider` — 'groq' | 'anthropic' | 'openrouter'
+
+Query for daily cost:
 ```sql
-SELECT 
+SELECT
   DATE(created_at) as date,
   provider,
-  SUM(tokens_in) as total_tokens_in,
-  SUM(tokens_out) as total_tokens_out,
-  SUM(token_cost_usd) as total_cost_usd,
-  COUNT(*) as call_count
+  SUM(tokens_in) as total_input_tokens,
+  SUM(tokens_out) as total_output_tokens,
+  SUM(token_cost_usd) as total_cost_usd
 FROM ai_tool_call_logs
-WHERE created_at >= NOW() - INTERVAL '30 days'
+WHERE tool_name = '__turn_summary__'
+  AND created_at > NOW() - INTERVAL '30 days'
 GROUP BY DATE(created_at), provider
-ORDER BY date DESC, provider;
-```
-
-**Handoff Rate:**
-```sql
-SELECT 
-  COUNT(*) FILTER (WHERE status = 'handed_off') * 100.0 / COUNT(*) as handoff_rate_percent,
-  COUNT(*) FILTER (WHERE status = 'handed_off') as total_handoffs,
-  COUNT(*) as total_sessions
-FROM ai_chat_sessions
-WHERE started_at >= NOW() - INTERVAL '7 days';
-```
-
-**Most Common Tools:**
-```sql
-SELECT 
-  tool_name,
-  COUNT(*) as call_count,
-  AVG(duration_ms) as avg_duration_ms
-FROM ai_tool_call_logs
-WHERE created_at >= NOW() - INTERVAL '7 days'
-GROUP BY tool_name
-ORDER BY call_count DESC
-LIMIT 10;
+ORDER BY date DESC;
 ```
 
 ---
 
-## 18. Future Enhancements
+## 18. Security Model
 
-### 18.1 Planned Features
+### 18.1 Widget (Public-Facing)
+- **No authentication** — widget is fully public
+- **CORS** — controlled by `WIDGET_ALLOWED_ORIGINS` env var (`*` in dev, explicit origins in production)
+- **Rate limiting** — per `visitor_id`, configurable in `src/agent/token-bucket.ts`
+- **Read-only** — no mutations possible through widget API
+- **No secrets** — widget bundle contains only the backend URL (public)
 
-1. **Multi-Channel Input**
-   - Email ingestion (IMAP listener)
-   - Voice calls (Twilio integration)
-   - Social media DMs (Facebook, Instagram)
+### 18.2 Admin Panel
+- **JWT authentication** — HS256 signed with `JWT_SIGNING_SECRET_ADMIN`
+- **Access token** — 15 minutes, httpOnly cookie
+- **Refresh token** — 7 days, httpOnly cookie, SHA-256 hash stored in `ai_admin_sessions`
+- **Token rotation** — middleware auto-refreshes on every request using refresh token
+- **Dev bypass** — `resolveAdmin()` returns `Dev Admin` when `NODE_ENV !== 'production'`
+- **Password hashing** — bcryptjs with cost=12 (replaced argon2 for Vercel serverless compatibility)
+- **Auto-logout on 401** — `apiFetch()` wrapper redirects to `/login?from=<path>` when refresh fails
 
-2. **Advanced RAG**
-   - Contextual reranking (Cohere API)
-   - Query expansion (generate multiple search queries)
-   - Hybrid search (keyword + semantic)
+### 18.3 AI Backend (API Routes)
+- **No public auth** on widget routes — rate limiting only
+- **JWT auth** on `/api/admin/*` routes — same JWT secret as ai-admin
+- **Supabase service role** — server-side only, never exposed to browser
+- **Tashus adapter** — GET-only, allow-listed endpoints, no user credentials passed
 
-3. **Proactive Engagement**
-   - Trigger chatbot on specific page events (e.g., 3+ mins on search page with no results)
-   - Abandoned cart recovery
-   - Post-booking follow-ups
-
-4. **A/B Testing**
-   - Multiple system prompts (A/B test conversion rates)
-   - Tool availability experiments
-   - Model comparison (Claude vs GPT-4 vs Llama)
-
-5. **Admin Dashboard Enhancements**
-   - Session replay (step-through message history with tool call inspection)
-   - Canned responses (quick replies for common questions)
-   - Auto-assignment (route handoffs to specific admins by expertise)
-
----
-
-## Conclusion
-
-This blueprint captures the complete architectural intelligence of the Tashus AI ecosystem as of 2026-07-13. It serves as the single source of truth for:
-
-- **Data models** — Vehicle, availability, pricing, reservations, vouchers, promotions
-- **API contracts** — Every endpoint, request/response payload, authentication pattern
-- **Service flows** — Search, booking, voucher validation, handoff, pricing
-- **AI orchestration** — Tool registry, RAG pipeline, circuit breaker, token optimization
-- **Security** — Read-only adapter, allow-list enforcement, database constraints, auth layers
-
-**Critical Design Principles:**
-1. **Read-Only AI** — The AI ecosystem NEVER writes to Tashus production. All mutating operations (create reservation, apply voucher) happen in authenticated frontend flows.
-2. **Compliance Proof** — Every tool call is logged with `http_method='GET'` (database constraint enforces this).
-3. **Human Oversight** — The `is_ai_paused` circuit breaker gives admins full control during handoffs.
-4. **Token Efficiency** — Code-level filtering and masking reduce token consumption by 90-94%.
-5. **Separation of Concerns** — AI database is completely separate from Tashus production. No shared tables, no cross-database queries.
-
-**For AI Agents:** Use this document as context when modifying the codebase. All data models, API endpoints, and service flows documented here are the canonical source of truth. When in doubt, refer to this blueprint rather than making assumptions.
+### 18.4 Secrets Inventory
+| Secret | Used by | Where stored |
+|---|---|---|
+| `SUPABASE_SERVICE_ROLE_KEY` | ai-backend, ai-admin | Vercel env vars |
+| `GROK_API_KEYS` (6 keys) | ai-backend | Vercel env vars |
+| `JWT_SIGNING_SECRET_ADMIN` | ai-backend, ai-admin | Vercel env vars (must match) |
+| `REDIS_URL` (Upstash TLS) | ai-backend, ai-admin, worker | Vercel + Koyeb env vars |
+| `ANTHROPIC_API_KEY` | ai-backend (fallback) | Vercel env vars |
+| `EMBEDDING_PROVIDER_API_KEY` | ai-backend, worker | Vercel env vars |
 
 ---
 
-**Document Version:** 1.0  
-**Generated:** 2026-07-13  
-**Last Updated:** 2026-07-13  
-**Maintainer:** Tashus AI Team
+## 19. Environment Variables Reference
 
+### ai-backend (Vercel)
+| Variable | Required | Example | Notes |
+|---|---|---|---|
+| `SUPABASE_URL` | ✅ | `https://xxx.supabase.co` | AI-only project |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | `eyJhbGci...` | Min 100 chars |
+| `REDIS_URL` | ✅ | `rediss://default:...@...upstash.io:6379` | Must be `rediss://` for Upstash TLS |
+| `GROK_API_KEYS` | ✅ | `gsk_xxx,gsk_yyy,...` | Comma-separated, up to 7 keys |
+| `GROK_API_BASE_URL` | ✅ | `https://api.groq.com/openai` | |
+| `JWT_SIGNING_SECRET_ADMIN` | ✅ | 32+ char random string | Must match ai-admin |
+| `TASHUS_API_BASE_URL` | ✅ | `https://api.tashus.com/api` | |
+| `EMBEDDING_PROVIDER` | ✅ | `openai` | `openai` or `voyage` |
+| `EMBEDDING_PROVIDER_API_KEY` | ✅ | `sk-...` or `sk-dummy-...` | Dummy key → mock embeddings |
+| `EMBEDDING_MODEL` | ✅ | `text-embedding-3-large` | |
+| `EMBEDDING_DIMENSION` | ✅ | `1536` | Must match pgvector column |
+| `WIDGET_ALLOWED_ORIGINS` | ✅ | `https://tashus.com,http://localhost:3000` | CORS whitelist |
+| `ANTHROPIC_API_KEY` | ❌ | `sk-ant-api03-...` | Optional fallback |
+| `NODE_ENV` | ✅ | `production` | Enables JWT auth, disables dev bypass |
+
+### ai-admin (Vercel)
+| Variable | Required | Notes |
+|---|---|---|
+| `NEXT_PUBLIC_AI_BACKEND_URL` | ✅ | Browser-facing backend URL |
+| `AI_BACKEND_URL` | ✅ | Server-side backend URL (token-bucket, ingest) |
+| `SUPABASE_URL` | ✅ | Same as ai-backend |
+| `SUPABASE_SERVICE_ROLE_KEY` | ✅ | Same as ai-backend |
+| `REDIS_URL` | ✅ | Same as ai-backend |
+| `JWT_SIGNING_SECRET_ADMIN` | ✅ | **Must be identical** to ai-backend |
+| `EMBEDDING_PROVIDER` | ✅ | Same as ai-backend |
+| `EMBEDDING_PROVIDER_API_KEY` | ✅ | Same as ai-backend |
+| `EMBEDDING_MODEL` | ✅ | Same as ai-backend |
+| `EMBEDDING_DIMENSION` | ✅ | Same as ai-backend |
+| `NODE_ENV` | ✅ | `production` |
+
+### Worker Process (Koyeb/Railway)
+All of ai-backend vars plus:
+| Variable | Value |
+|---|---|
+| `WORKER_PROCESS` | `true` — enables BullMQ-compatible Redis config (`maxRetriesPerRequest: null`) |
+
+### ai-widget Build
+| Variable | Notes |
+|---|---|
+| `VITE_AI_BACKEND_URL` | Baked into bundle at build time. Production: `https://tashus-ai-ten.vercel.app` |
+
+---
+
+## 20. Known Limitations & Future Work
+
+### Current Limitations
+
+| Limitation | Impact | Workaround |
+|---|---|---|
+| Mock embeddings in production (dummy API key) | KB search uses keyword fallback (slower, less accurate) | Provide real `EMBEDDING_PROVIDER_API_KEY` |
+| Vercel Hobby 10s function timeout | Long LLM responses may cut off | Fluid Compute enabled (300s max) |
+| No persistent SSE (Vercel serverless) | Widget polls every 2s for admin messages | Acceptable for chat UX |
+| Groq rate limits (429) at high traffic | Falls back to Anthropic or mock | 6 keys + token bucket rotation |
+| Session summarization is best-effort | Long sessions may lose context | BullMQ queue with retry |
+| No real-time WebSocket | Admin panel polls every 3s for message updates | Acceptable for admin UX |
+| PDF ingestion limit 20MB | Large policy documents may need splitting | Admin UI enforces 20MB |
+
+### Planned Enhancements (V4.0)
+
+| Feature | Description |
+|---|---|
+| **Canned responses** | Admin pre-saved replies, `ai_canned_responses` table exists, UI pending |
+| **Session tags** | Categorize sessions (billing, booking, technical), `ai_session_tags` table exists |
+| **Advanced analytics** | Response time metrics, resolution rate, handoff rate by time |
+| **Real OpenAI embeddings** | Better semantic search quality — just set real key |
+| **Multi-channel** | Email channel partially implemented (`/api/ai/channels/email/webhook`) |
+| **Team collaboration** | Session transfer between admins |
+| **Proactive messages** | Trigger widget messages based on user page behavior |
+
+---
+
+*Blueprint version 3.2.0 — Last updated 2026-08-03*
+*Verified against codebase: ai-backend v3.1.0, ai-admin v2.0, ai-widget v0.0.0*
