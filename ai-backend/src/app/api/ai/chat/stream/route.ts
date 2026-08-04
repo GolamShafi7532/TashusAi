@@ -94,18 +94,21 @@ export async function POST(req: Request) {
     return NextResponse.json({ error: 'Session not found' }, { status: 404 });
   }
 
-  // 2. Enforce Redis Rate Limiting (COST-01)
-  const rateLimit = await isRateLimited(session.visitor_id || 'unknown');
-  if (rateLimit.limited) {
-    return NextResponse.json(
-      { error: 'Too many requests. Please try again later.' },
-      {
-        status: 429,
-        headers: {
-          'Retry-After': String(rateLimit.retryAfter || 60),
-        },
-      }
-    );
+  // 2. Enforce Redis Rate Limiting — non-fatal: if Redis is down, allow the request
+  try {
+    const rateLimit = await isRateLimited(session.visitor_id || 'unknown');
+    if (rateLimit.limited) {
+      return NextResponse.json(
+        { error: 'Too many requests. Please try again later.' },
+        {
+          status: 429,
+          headers: { 'Retry-After': String(rateLimit.retryAfter || 60) },
+        }
+      );
+    }
+  } catch (rateLimitErr: any) {
+    // Redis unavailable — allow the request through rather than blocking all users
+    console.warn('[StreamRoute] Rate limiter unavailable (Redis error):', rateLimitErr?.message);
   }
 
   const channel = buildSessionControlChannel(sessionId);
