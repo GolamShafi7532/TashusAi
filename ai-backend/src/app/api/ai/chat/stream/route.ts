@@ -4,8 +4,10 @@ import { db } from '@/db/client';
 export const dynamic = 'force-dynamic';
 export const maxDuration = 300; // Vercel: keep function alive for long Groq streams
 import { processMessageStream } from '@/agent/orchestrator';
-import { getRedisSubscriber, buildSessionControlChannel, redis } from '@/lib/redis';
+import { buildSessionControlChannel, redis } from '@/lib/redis';
 import { isRateLimited } from '@/lib/rate-limiter';
+import Redis from 'ioredis';
+import { env } from '@/lib/env';
 
 export interface UserContext {
   timezone: string;       // IANA tz name, e.g. "Australia/Sydney"
@@ -106,11 +108,30 @@ export async function POST(req: Request) {
     );
   }
 
-  const subscriber = getRedisSubscriber();
   const channel = buildSessionControlChannel(sessionId);
 
   let isPaused = session.is_ai_paused;
   let isClosed = false;
+
+  // Create a fresh per-request subscriber — the globalThis singleton CANNOT be
+  // used here because a Redis client in subscribe mode is exclusive to that
+  // subscription and cannot be shared across concurrent Vercel invocations.
+  const IS_WORKER = process.env.WORKER_PROCESS === 'true';
+  const subscriber = new Redis(env.REDIS_URL, {
+    maxRetriesPerRequest: IS_WORKER ? null : 1,
+    enableReadyCheck: false,
+    lazyConnect: false,
+    retryStrategy(times: number) {
+      if (!IS_WORKER && times > 2) return null;
+      return Math.min(100 * 2 ** times, 5000);
+    },
+    tls: env.REDIS_URL.startsWith('rediss://') ? {} : undefined,
+  });
+
+  subscriber.on('error', (err: Error) => {
+    if (env.NODE_ENV === 'development' && err.message.includes('ECONNREFUSED')) return;
+    console.error('[StreamRoute] Subscriber error:', err.message);
+  });
 
   const controller = new ReadableStream({
     async start(ctrl) {
@@ -122,6 +143,7 @@ export async function POST(req: Request) {
         isClosed = true;
         subscriber.off('message', onMessage);
         subscriber.unsubscribe(channel).catch(() => {});
+        subscriber.disconnect();
         try {
           ctrl.close();
         } catch {}
