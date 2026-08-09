@@ -124,26 +124,56 @@ export function openSessionControlStream(
   const backendUrl = getBackendUrl();
   const url = `${backendUrl}/api/ai/session/${sessionId}/stream`;
   let es: EventSource | null = null;
+  let closedManually = false;
+  let reconnectTimer: ReturnType<typeof setTimeout> | null = null;
+  let retryCount = 0;
 
-  try {
-    es = new EventSource(url, { withCredentials: true });
+  const connect = () => {
+    if (closedManually) return;
+    try {
+      if (es) es.close();
+      es = new EventSource(url, { withCredentials: true });
 
-    es.addEventListener('admin_message', (ev) => {
-      try { onEvent({ type: 'admin_message', ...JSON.parse(ev.data) }); } catch {}
-    });
+      es.onopen = () => {
+        retryCount = 0; // reset retry counter on successful connection
+      };
 
-    es.addEventListener('control', (ev) => {
-      try { onEvent({ type: 'control', ...JSON.parse(ev.data) }); } catch {}
-    });
+      es.addEventListener('admin_message', (ev) => {
+        try { onEvent({ type: 'admin_message', ...JSON.parse(ev.data) }); } catch {}
+      });
 
-    es.addEventListener('message', (ev) => {
-      try { onEvent({ type: 'message', ...JSON.parse(ev.data) }); } catch {}
-    });
-  } catch (e) {
-    console.warn('[SessionControlStream] Failed to connect SSE stream:', e);
-  }
+      es.addEventListener('control', (ev) => {
+        try { onEvent({ type: 'control', ...JSON.parse(ev.data) }); } catch {}
+      });
+
+      es.addEventListener('message', (ev) => {
+        try { onEvent({ type: 'message', ...JSON.parse(ev.data) }); } catch {}
+      });
+
+      es.onerror = () => {
+        if (closedManually) return;
+        // EventSource will try to reconnect natively, but cross-origin iframes
+        // frequently get stuck in CLOSED state. Force manual reconnect with backoff.
+        if (es && es.readyState === EventSource.CLOSED) {
+          es.close();
+          const delay = Math.min(1000 * Math.pow(2, retryCount), 15000);
+          retryCount++;
+          reconnectTimer = setTimeout(connect, delay);
+        }
+      };
+    } catch (e) {
+      console.warn('[SessionControlStream] Failed to connect SSE stream:', e);
+      const delay = Math.min(2000 * Math.pow(2, retryCount), 15000);
+      retryCount++;
+      reconnectTimer = setTimeout(connect, delay);
+    }
+  };
+
+  connect();
 
   return () => {
+    closedManually = true;
+    if (reconnectTimer) clearTimeout(reconnectTimer);
     if (es) es.close();
   };
 }

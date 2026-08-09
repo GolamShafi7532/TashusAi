@@ -512,7 +512,7 @@ export default function TestChatPage() {
       }
     };
     fetchKeyStatus();
-    const interval = setInterval(fetchKeyStatus, 2000);
+    const interval = setInterval(fetchKeyStatus, 15000);
     return () => clearInterval(interval);
   }, []);
 

@@ -82,7 +82,7 @@ export default function TokenBucketPage() {
   useEffect(() => {
     refresh();
     if (!autoRefresh) return;
-    const interval = setInterval(refresh, 3000);
+    const interval = setInterval(refresh, 10000);
     return () => clearInterval(interval);
   }, [autoRefresh, refresh]);
 

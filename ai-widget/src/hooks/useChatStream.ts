@@ -188,50 +188,52 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
 
     // 2. HTTP Polling — only runs during handoff (is_ai_paused=true) or as infrequent safety net
     // When AI is active: SSE handles all real-time delivery, poll at 15s just as a safety net
-    // When in handoff: poll at 3s to ensure admin messages arrive even if SSE drops
+    // When in handoff: poll at 4s to ensure admin messages arrive even if SSE drops
     let active = true;
     let timer: ReturnType<typeof setTimeout>;
 
     const poll = async () => {
       if (!active) return;
 
-      const result = await pollSessionState(sessionId, lastAdminMsgAt.current);
+      try {
+        const result = await pollSessionState(sessionId, lastAdminMsgAt.current);
 
-      if (result && active) {
-        if (result.is_ai_paused !== pausedRef.current) {
-          setPaused(result.is_ai_paused);
-        }
+        if (result && active) {
+          if (result.is_ai_paused !== pausedRef.current) {
+            setPaused(result.is_ai_paused);
+          }
 
-        const newMsgs = result.messages.filter(
-          (m) => !seenMessageIds.current.has(m.id)
-        );
+          const newMsgs = result.messages.filter(
+            (m) => !seenMessageIds.current.has(m.id)
+          );
 
-        if (newMsgs.length > 0) {
-          newMsgs.forEach((m) => {
-            handleIncomingMessage({
-              id: m.id,
-              role: m.role,
-              content: m.content,
-              created_at: m.created_at,
-              admin_display_name: m.admin_display_name,
+          if (newMsgs.length > 0) {
+            newMsgs.forEach((m) => {
+              handleIncomingMessage({
+                id: m.id,
+                role: m.role,
+                content: m.content,
+                created_at: m.created_at,
+                admin_display_name: m.admin_display_name,
+              });
+              if (m.created_at > lastAdminMsgAt.current) {
+                lastAdminMsgAt.current = m.created_at;
+              }
             });
-            if (m.created_at > lastAdminMsgAt.current) {
-              lastAdminMsgAt.current = m.created_at;
-            }
-          });
+          }
         }
+      } catch (err) {
+        console.warn('[AI Widget] Session poll warning:', err);
       }
 
       if (active) {
-        // Poll frequently during handoff (admin messages need fast delivery)
-        // Poll rarely when AI is active (SSE handles real-time, poll is just a safety net)
-        const interval = pausedRef.current ? 3000 : 15000;
+        const interval = pausedRef.current ? 4000 : 15000;
         timer = setTimeout(poll, interval);
       }
     };
 
-    // Initial poll after 3s to let history load settle
-    timer = setTimeout(poll, 3000);
+    // Initial poll after 1.5s to settle initial load
+    timer = setTimeout(poll, 1500);
 
     return () => {
       active = false;

@@ -139,8 +139,11 @@ export const TASHUS_CACHE_TTL: Record<string, number> = {
   '/search/vehicle-delivery-price/:drivingDistanceInKm': 60,
 };
 
+const DEV_MULTIPLIER = process.env.NODE_ENV === 'development' ? (Number(process.env.DEV_CACHE_MULTIPLIER) || 5) : 1;
+
 export function getTtlSeconds(template: string): number {
-  return TASHUS_CACHE_TTL[template] ?? 60;
+  const baseTtl = TASHUS_CACHE_TTL[template] ?? 60;
+  return baseTtl * DEV_MULTIPLIER;
 }
 
 // ── Convenience re-export ───────────────────────────────────────────────────

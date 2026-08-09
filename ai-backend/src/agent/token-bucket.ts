@@ -29,6 +29,21 @@ const COOLDOWN_5XX_SECS = 30;
 /** How long a key stays in cooldown after a timeout */
 const COOLDOWN_TIMEOUT_SECS = 15;
 
+// ── In-process status cache ────────────────────────────────────────────────────
+// Prevents dev polling loops (2s/3s/5s intervals × 5–6 devs) from hammering
+// Redis with getBucketStatus() calls. TTL = 10s — short enough to feel live,
+// long enough to collapse hundreds of concurrent polls into a single Redis read.
+//
+// This lives on globalThis so it survives across hot-reloads in Next.js dev.
+// In production serverless (Vercel), each instance has its own globalThis —
+// the cache is isolated per-instance, which is fine and expected.
+const g = globalThis as unknown as {
+  _tokenBucketStatusCache: { data: BucketStatus; expiresAt: number } | undefined;
+};
+
+const STATUS_CACHE_TTL_MS = 10_000; // 10 seconds
+
+
 // ── Types ──────────────────────────────────────────────────────────────────────
 
 export interface KeyStatus {
@@ -125,7 +140,11 @@ export async function markKeyCooldown(
     redis.incr(failureKey(masked)).catch(() => {}),
   ]);
 
+  // Bust the in-process cache so the next dashboard poll reflects this change immediately
+  invalidateBucketStatusCache();
+
   console.log(`[TokenBucket] 🔴 Key ${masked} in cooldown for ${ttl}s (${errorType})`);
+
 }
 
 /**
@@ -138,13 +157,23 @@ export async function markKeySuccess(keyOrMasked: string): Promise<void> {
     redis.set(failureKey(masked), '0').catch(() => {}),
     redis.incr(successKey(masked)).catch(() => {}),
   ]);
+
+  // Bust the in-process cache so the next dashboard poll reflects this change immediately
+  invalidateBucketStatusCache();
 }
+
 
 /**
  * Get full status of all keys in the bucket.
  * Used by the admin dashboard and header alert.
  */
 export async function getBucketStatus(): Promise<BucketStatus> {
+  // Serve from in-process cache if it's still fresh — collapses all concurrent
+  // dev poll ticks into a single Redis round-trip per 10s window.
+  if (g._tokenBucketStatusCache && Date.now() < g._tokenBucketStatusCache.expiresAt) {
+    return g._tokenBucketStatusCache.data;
+  }
+
   const keys = getAllKeys();
 
   const statuses: KeyStatus[] = await Promise.all(
@@ -186,11 +215,26 @@ export async function getBucketStatus(): Promise<BucketStatus> {
     ? Math.min(...statuses.filter((s) => !s.available).map((s) => s.cooldownSeconds))
     : 0;
 
-  return {
+  const result: BucketStatus = {
     keys: statuses,
     availableCount,
     totalKeys: keys.length,
     allCoolingDown,
     nextAvailableIn,
   };
+
+  // Populate in-process cache
+  g._tokenBucketStatusCache = { data: result, expiresAt: Date.now() + STATUS_CACHE_TTL_MS };
+
+  return result;
 }
+
+/**
+ * Explicitly invalidate the in-process status cache.
+ * Call this after markKeyCooldown() or markKeySuccess() so the next poll
+ * immediately reflects the new state rather than serving stale data.
+ */
+export function invalidateBucketStatusCache(): void {
+  g._tokenBucketStatusCache = undefined;
+}
+

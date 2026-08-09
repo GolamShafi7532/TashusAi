@@ -23,8 +23,19 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
       const res = await apiFetch(`/api/admin/sessions/${sessionId}`);
       if (res.ok) {
         const data = await res.json();
-        setSession(data.session);
-        setMessages(data.messages || []);
+        setSession((prev: any) => {
+          if (!prev || prev.is_ai_paused !== data.session?.is_ai_paused || prev.status !== data.session?.status) {
+            return data.session;
+          }
+          return prev;
+        });
+        setMessages((prev: any[]) => {
+          const newMsgs = data.messages || [];
+          if (prev.length !== newMsgs.length || (newMsgs.length > 0 && prev[prev.length - 1]?.id !== newMsgs[newMsgs.length - 1]?.id)) {
+            return newMsgs;
+          }
+          return prev;
+        });
       } else if (res.status === 404) {
         router.push('/sessions');
       }

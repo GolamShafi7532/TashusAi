@@ -57,11 +57,11 @@ export async function loadActiveAgentConfig(): Promise<AiAgentConfig> {
       updated_at: new Date().toISOString(),
     };
 
-    await redis.set(AGENT_CONFIG_CACHE_KEY, JSON.stringify(fallback), 'EX', 60);
+    await redis.set(AGENT_CONFIG_CACHE_KEY, JSON.stringify(fallback), 'EX', 300);
     return fallback;
   }
 
-  await redis.set(AGENT_CONFIG_CACHE_KEY, JSON.stringify(data), 'EX', 60);
+  await redis.set(AGENT_CONFIG_CACHE_KEY, JSON.stringify(data), 'EX', 300);
   // Always use file prompt — never serve a stale DB copy
   return { ...(data as AiAgentConfig), system_prompt: filePrompt };
 }

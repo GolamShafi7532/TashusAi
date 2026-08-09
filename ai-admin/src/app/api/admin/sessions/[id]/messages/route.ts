@@ -53,14 +53,12 @@ export async function POST(
       return NextResponse.json({ error: 'Failed to send message' }, { status: 500 });
     }
 
-    // Update session last_message_at
-    await (db.from('ai_chat_sessions') as any)
-      .update({ last_message_at: msg.created_at })
-      .eq('id', sessionId);
-
-    // Publish to Redis so widget receives it via polling
-    try {
-      await getRedisClient().publish(
+    // Fire session last_message_at update & Redis publish in parallel without blocking HTTP response
+    Promise.all([
+      (db.from('ai_chat_sessions') as any)
+        .update({ last_message_at: msg.created_at })
+        .eq('id', sessionId),
+      getRedisClient().publish(
         buildSessionControlChannel(sessionId),
         JSON.stringify({
           type: 'message',
@@ -72,10 +70,8 @@ export async function POST(
             admin_display_name: admin.displayName,
           },
         })
-      );
-    } catch (e) {
-      console.warn('[MessagesRoute] Redis publish failed (non-critical):', e);
-    }
+      ).catch((e) => console.warn('[MessagesRoute] Redis publish failed:', e))
+    ]).catch((err) => console.error('[MessagesRoute] Background tasks failed:', err));
 
     return NextResponse.json({ success: true, message: msg });
   } catch (err: any) {
