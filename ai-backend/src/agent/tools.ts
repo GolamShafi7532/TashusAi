@@ -75,28 +75,29 @@ RULES:
         },
 
         // Optional filters — server applies these, never ask LLM to do math
+        // IMPORTANT: Do NOT pass null for any of these fields — simply omit them if not applicable
         cType: {
           type: 'string',
           enum: ['SUV', 'Sedan', 'Hatchback', 'Ute', 'Van', 'Convertible', 'Coupe', 'Wagon'],
-          description: 'Vehicle category filter. Pass as-is from user query.',
+          description: 'Vehicle category filter. ONLY include this field if the user explicitly mentioned a vehicle type. OMIT this field entirely (do not pass null) if no type was specified.',
         },
         tType: {
           type: 'string',
           enum: ['Automatic', 'Manual'],
-          description: 'Transmission type filter.',
+          description: 'Transmission type filter. OMIT entirely if not specified by user.',
         },
         fType: {
           type: 'string',
           enum: ['Petrol', 'Diesel', 'Electric', 'Hybrid'],
-          description: 'Fuel type filter.',
+          description: 'Fuel type filter. OMIT entirely if not specified by user.',
         },
         minSeats: {
           type: 'number',
-          description: 'MINIMUM passenger seats required (floor limit, not exact match). E.g. minSeats=5 returns 5, 7, 8-seater vehicles. If user says "5-seater", pass minSeats=5.',
+          description: 'MINIMUM passenger seats required (floor limit, not exact match). E.g. minSeats=5 returns 5, 7, 8-seater vehicles. If user says "5-seater", pass minSeats=5. OMIT if not specified.',
         },
         maxPrice: {
           type: 'number',
-          description: 'Maximum daily rate in AUD (ceiling). Server filters out vehicles exceeding this. If user says "under $120", pass maxPrice=120.',
+          description: 'Maximum daily rate in AUD (ceiling). Server filters out vehicles exceeding this. If user says "under $120", pass maxPrice=120. OMIT if not specified.',
         },
       },
       required: ['from', 'to'],

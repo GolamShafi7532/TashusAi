@@ -102,6 +102,11 @@ function intentNeedsRag(text: string): boolean {
     /\b(book|rent|reserve|hire|available|availability|pickup|return|voucher|discount|code|promo)\b/i;
   if (transactionalPattern.test(t)) return false;
 
+  // Vehicle search intent — "i need a car/suv/vehicle", "find me a van under $60", etc.
+  const vehicleSearchPattern =
+    /\b(i need|show me|find me|get me|looking for|want)\b.{0,40}\b(car|vehicle|suv|sedan|hatchback|ute|van|truck|convertible|coupe|wagon)\b/i;
+  if (vehicleSearchPattern.test(t)) return false;
+
   // Vehicle type words alone don't need RAG — they trigger search_vehicles tool
   const vehicleTypeOnly = /^(i need |show me |find me |get me )?(a |an |some )?(suv|sedan|hatchback|ute|van|convertible|coupe|wagon|car|vehicle|truck)s?(\s+in\s+\w+)?(\s+under\s+\$?\d+)?$/i;
   if (vehicleTypeOnly.test(t)) return false;
@@ -491,7 +496,12 @@ export async function* processMessageStream(sessionId: string, userText: string,
             result = await searchKnowledgeBaseTool(String(toolArgs?.query ?? ''));
           }
         } else {
-          result = await executeTool(toolName, toolArgs, { sessionId });
+          // Strip null/undefined values from tool args — gpt-oss-120b sometimes passes
+          // null for optional enum fields (e.g. cType: null) which fails schema validation
+          const cleanArgs = Object.fromEntries(
+            Object.entries(toolArgs).filter(([, v]) => v !== null && v !== undefined)
+          );
+          result = await executeTool(toolName, cleanArgs, { sessionId });
         }
         const resultSummary = typeof result === 'string'
           ? result.slice(0, 200)

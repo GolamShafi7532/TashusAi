@@ -55,14 +55,18 @@ function openCircuit(name: string, reason: string) {
 }
 
 function isRetryable(err: any): boolean {
+  // tool_use_failed means the model sent invalid tool call args — NOT a provider failure.
+  // The orchestrator handles this by retrying without tools. Do NOT open the circuit.
+  if (err?.code === 'tool_use_failed' || String(err?.message).includes('tool_use_failed')) {
+    return false;
+  }
+
   const retryableStatuses = [429, 500, 502, 503, 504];
   return (
     retryableStatuses.includes(err?.status) ||
-    err?.code === 'tool_use_failed' ||
     String(err?.message).toLowerCase().includes('rate limit') ||
     String(err?.message).toLowerCase().includes('timeout') ||
     String(err?.message).toLowerCase().includes('econnreset') ||
-    String(err?.message).toLowerCase().includes('tool_use_failed') ||
     String(err?.message).toLowerCase().includes('all grok keys') ||
     String(err?.message).toLowerCase().includes('all groq keys')
   );
@@ -160,8 +164,10 @@ export async function* streamWithFallback(
         return;
       }
 
-      // Provider returned an empty stream — treat as soft failure
-      throw new Error(`${provider.name} returned empty stream`);
+      // Provider returned an empty stream after tool_use_failed — this is expected.
+      // The orchestrator handles the retry without tools. Return cleanly.
+      console.log(`[FallbackChain] ✅  ${provider.name} returned empty stream (likely after tool_use_failed — orchestrator will retry without tools)`);
+      return;
 
     } catch (err: any) {
       console.error(`[FallbackChain] ❌  ${provider.name} failed: ${err.message}`);

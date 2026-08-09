@@ -317,7 +317,13 @@ async function* tryGrokStream(
               const tc = delta.tool_calls[0];
               if (tc.function?.name) {
                 if (currentToolCall) {
-                  try { yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: JSON.parse(currentToolCall.arguments) }; } catch {}
+                  try {
+                    const rawArgs = JSON.parse(currentToolCall.arguments);
+                    const cleanArgs = Object.fromEntries(
+                      Object.entries(rawArgs).filter(([, v]) => v !== null && v !== undefined)
+                    );
+                    yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: cleanArgs };
+                  } catch {}
                 }
                 currentToolCall = { id: tc.id || `grok-tc-${Date.now()}`, name: tc.function.name, arguments: tc.function.arguments || '' };
               } else if (tc.function?.arguments && currentToolCall) {
@@ -326,7 +332,15 @@ async function* tryGrokStream(
             }
 
             if ((choice.finish_reason === 'tool_calls' || (choice.finish_reason && currentToolCall)) && currentToolCall) {
-              try { yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: JSON.parse(currentToolCall.arguments) }; }
+              try {
+                // Strip null values before yielding — gpt-oss-120b sends null for
+                // optional enum fields which fails Groq's own schema validation
+                const rawArgs = JSON.parse(currentToolCall.arguments);
+                const cleanArgs = Object.fromEntries(
+                  Object.entries(rawArgs).filter(([, v]) => v !== null && v !== undefined)
+                );
+                yield { type: 'tool_call' as const, name: currentToolCall.name, id: currentToolCall.id, args: cleanArgs };
+              }
               catch (e) { console.error('[Grok] Failed to parse tool call args:', currentToolCall.arguments); }
               currentToolCall = null;
             }
