@@ -68,10 +68,11 @@ export async function GET(
       );
     }
 
-    // Query messages created after `since`
+    // Query messages created after `since` (only system and admin messages)
     let query = (db.from('ai_chat_messages') as any)
       .select('id, role, content, created_at, sent_by_admin_id')
       .eq('session_id', sessionId)
+      .neq('role', 'assistant')
       .order('created_at', { ascending: true });
 
     if (since) {

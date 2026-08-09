@@ -214,7 +214,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
           }
 
           const newMsgs = result.messages.filter(
-            (m) => m.role !== 'user' && !seenMessageIds.current.has(m.id)
+            (m) => m.role !== 'user' && m.role !== 'assistant' && !seenMessageIds.current.has(m.id)
           );
 
           if (newMsgs.length > 0) {
