@@ -35,11 +35,11 @@ export async function POST(
     }
 
     const systemMsgContent = '✅ Human agent left. Tashus AI has resumed — feel free to continue!';
-    await (db.from('ai_chat_messages') as any).insert({
+    const { data: insertedMsg } = await (db.from('ai_chat_messages') as any).insert({
       session_id: sessionId,
       role: 'system',
       content: systemMsgContent,
-    });
+    }).select('id, created_at').single();
 
     try {
       await getRedisClient().publish(
@@ -47,7 +47,7 @@ export async function POST(
         JSON.stringify({
           type: 'control',
           paused: false,
-          message: { role: 'system', content: systemMsgContent },
+          message: { id: insertedMsg?.id, role: 'system', content: systemMsgContent, created_at: insertedMsg?.created_at },
         })
       );
     } catch (e) {

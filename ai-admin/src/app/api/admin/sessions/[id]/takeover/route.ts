@@ -34,16 +34,16 @@ export async function POST(
     }
 
     const systemMsgContent = `${admin.displayName} has joined the conversation. AI is now paused.`;
-    await (db.from('ai_chat_messages') as any).insert({
+    const { data: insertedMsg } = await (db.from('ai_chat_messages') as any).insert({
       session_id: sessionId,
       role: 'system',
       content: systemMsgContent,
-    });
+    }).select('id, created_at').single();
 
     try {
       await getRedisClient().publish(
         buildSessionControlChannel(sessionId),
-        JSON.stringify({ type: 'control', paused: true, message: { role: 'system', content: systemMsgContent } })
+        JSON.stringify({ type: 'control', paused: true, message: { id: insertedMsg?.id, role: 'system', content: systemMsgContent, created_at: insertedMsg?.created_at } })
       );
     } catch (e) {
       console.warn('[TakeoverRoute] Redis publish failed (non-critical):', e);

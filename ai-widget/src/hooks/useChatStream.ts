@@ -56,7 +56,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
   const pausedRef = useRef(false);
   useEffect(() => { pausedRef.current = paused; }, [paused]);
 
-  // Helper to add incoming admin or system message safely
+  // Helper to add incoming admin, system, or user message safely without duplicating existing user bubbles
   const handleIncomingMessage = useCallback((msg: {
     id?: string;
     role: string;
@@ -64,6 +64,9 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
     created_at?: string;
     admin_display_name?: string;
   }) => {
+    // User messages are already rendered optimistically by send() — ignore user role from streams/polling
+    if (msg.role === 'user') return;
+
     const id = msg.id || makeId();
     if (seenMessageIds.current.has(id)) return;
     seenMessageIds.current.add(id);
@@ -78,6 +81,13 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
     };
 
     setMessages((prev) => [...prev, newMsg]);
+
+    // Advance the poll window so the next poll doesn't re-fetch this message from the DB.
+    // Use created_at if present, otherwise use current time as a conservative lower-bound.
+    const msgTs = msg.created_at ?? new Date().toISOString();
+    if (msgTs > lastAdminMsgAt.current) {
+      lastAdminMsgAt.current = msgTs;
+    }
 
     if (msg.role === 'admin') {
       setUnreadCount((n) => n + 1);
@@ -204,7 +214,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
           }
 
           const newMsgs = result.messages.filter(
-            (m) => !seenMessageIds.current.has(m.id)
+            (m) => m.role !== 'user' && !seenMessageIds.current.has(m.id)
           );
 
           if (newMsgs.length > 0) {
@@ -257,6 +267,7 @@ export function useChatStream(jwtCookieName?: string): UseChatStreamReturn {
         content: text.trim(),
         createdAt: new Date(),
       };
+      seenMessageIds.current.add(userMsg.id);
 
       const assistantId = makeId();
       const assistantMsg: ChatMessage = {

@@ -39,15 +39,18 @@ export async function POST(req: NextRequest, { params }: { params: { id: string 
       return NextResponse.json({ error: 'Failed to request handoff' }, { status: 500 });
     }
 
-    // Insert system message for widget timeline
+    // Insert system message for widget timeline — capture the returned ID and timestamp
     const systemMsg = '🤝 Connecting you to a human agent — please hold on for a moment.';
-    await (db.from('ai_chat_messages') as any).insert({ session_id: sessionId, role: 'system', content: systemMsg });
+    const { data: insertedMsg } = await (db.from('ai_chat_messages') as any)
+      .insert({ session_id: sessionId, role: 'system', content: systemMsg })
+      .select('id, created_at')
+      .single();
 
     // Publish to session channel so widget SSE can show the system message
     try {
       await redis.publish(buildSessionControlChannel(sessionId), JSON.stringify({
         type: 'control', paused: true,
-        message: { role: 'system', content: systemMsg },
+        message: { id: insertedMsg?.id, role: 'system', content: systemMsg, created_at: insertedMsg?.created_at },
       }));
     } catch (e) { console.warn('[HandoffRoute] session publish failed:', e); }
 

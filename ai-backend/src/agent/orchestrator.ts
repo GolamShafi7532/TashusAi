@@ -226,14 +226,16 @@ export async function* processMessageStream(sessionId: string, userText: string,
           .eq('id', dbSessionId);
 
         const systemMsg = '🤝 Connecting you to a human agent — please hold on a moment.';
-        await (db.from('ai_chat_messages') as any)
-          .insert({ session_id: dbSessionId, role: 'system', content: systemMsg });
+        const { data: insertedSysMsg } = await (db.from('ai_chat_messages') as any)
+          .insert({ session_id: dbSessionId, role: 'system', content: systemMsg })
+          .select('id, created_at')
+          .single();
 
         try {
           const { redis: redisClient, buildSessionControlChannel } = await import('@/lib/redis');
           await redisClient.publish(buildSessionControlChannel(dbSessionId), JSON.stringify({
             type: 'control', paused: true,
-            message: { role: 'system', content: systemMsg },
+            message: { id: insertedSysMsg?.id, role: 'system', content: systemMsg, created_at: insertedSysMsg?.created_at },
           }));
           await redisClient.publish('admin:notifications', JSON.stringify({
             type: 'handoff_requested',
@@ -548,8 +550,10 @@ export async function* processMessageStream(sessionId: string, userText: string,
           .eq('id', dbSessionId);
 
         const systemMsg = '🤝 Connecting you to a human agent — please hold on a moment.';
-        await (db.from('ai_chat_messages') as any)
-          .insert({ session_id: dbSessionId, role: 'system', content: systemMsg });
+        const { data: insertedSysMsg2 } = await (db.from('ai_chat_messages') as any)
+          .insert({ session_id: dbSessionId, role: 'system', content: systemMsg })
+          .select('id, created_at')
+          .single();
 
         try {
           const { redis: redisClient, buildSessionControlChannel } = await import('@/lib/redis');
@@ -557,7 +561,7 @@ export async function* processMessageStream(sessionId: string, userText: string,
             .select('visitor_id').eq('id', dbSessionId).single();
           await redisClient.publish(buildSessionControlChannel(dbSessionId), JSON.stringify({
             type: 'control', paused: true,
-            message: { role: 'system', content: systemMsg },
+            message: { id: insertedSysMsg2?.id, role: 'system', content: systemMsg, created_at: insertedSysMsg2?.created_at },
           }));
           await redisClient.publish('admin:notifications', JSON.stringify({
             type: 'handoff_requested',

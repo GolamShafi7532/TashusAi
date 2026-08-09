@@ -12,6 +12,9 @@ export default function DocumentsPage() {
   const [category, setCategory] = useState('general');
   const [file, setFile] = useState<File | null>(null);
   const [error, setError] = useState('');
+  const [passcode, setPasscode] = useState('');
+  const [passcodeUnlocked, setPasscodeUnlocked] = useState(false);
+  const [passcodErr, setPasscodeErr] = useState('');
   const isFetchingRef = useRef(false);
   const hasLoadedRef = useRef(false);
 
@@ -105,6 +108,16 @@ export default function DocumentsPage() {
       setError('Connection failure during upload.');
     } finally {
       setUploading(false);
+    }
+  };
+
+  const handlePasscode = () => {
+    if (passcode === '1111') {
+      setPasscodeUnlocked(true);
+      setPasscodeErr('');
+    } else {
+      setPasscodeErr('Incorrect passcode.');
+      setPasscode('');
     }
   };
 
@@ -232,25 +245,71 @@ export default function DocumentsPage() {
             <label className="block text-xs font-semibold text-[#94A3B8] uppercase tracking-wider">
               Select PDF File (Max 20MB)
             </label>
+
+            {/* Passcode gate */}
+            {!passcodeUnlocked && (
+              <div className="flex gap-2 mb-2 items-center">
+                <span className="text-[#94A3B8] text-xs flex items-center gap-1">
+                  <svg className="w-3.5 h-3.5 text-[#20B9BE]" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M12 15v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2zm10-10V7a4 4 0 00-8 0v4h8z" />
+                  </svg>
+                  Admin passcode required
+                </span>
+                <input
+                  type="password"
+                  maxLength={8}
+                  value={passcode}
+                  onChange={(e) => { setPasscode(e.target.value); setPasscodeErr(''); }}
+                  onKeyDown={(e) => e.key === 'Enter' && handlePasscode()}
+                  placeholder="Enter passcode"
+                  className="w-36 bg-[#090D11] border border-[#1E293B] rounded-lg px-3 py-1.5 text-xs text-white focus:outline-none focus:border-[#20B9BE] placeholder:text-[#475569] tracking-widest"
+                />
+                <button
+                  type="button"
+                  onClick={handlePasscode}
+                  className="bg-[#1E293B] hover:bg-[#20B9BE]/20 border border-[#1E293B] hover:border-[#20B9BE] text-xs text-[#94A3B8] hover:text-white rounded-lg px-3 py-1.5 transition-all"
+                >
+                  Unlock
+                </button>
+                {passcodErr && <span className="text-red-400 text-xs">{passcodErr}</span>}
+              </div>
+            )}
+            {passcodeUnlocked && (
+              <div className="flex items-center gap-1.5 text-emerald-400 text-xs mb-2">
+                <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M8 11V7a4 4 0 018 0m-4 8v2m-6 4h12a2 2 0 002-2v-6a2 2 0 00-2-2H6a2 2 0 00-2 2v6a2 2 0 002 2z" />
+                </svg>
+                <span>Upload unlocked</span>
+                <button type="button" onClick={() => { setPasscodeUnlocked(false); setPasscode(''); setFile(null); }} className="ml-2 text-[#94A3B8] hover:text-white text-[10px] underline">
+                  Lock
+                </button>
+              </div>
+            )}
+
             <div className="flex gap-3">
               <input
                 id="file-upload-input"
                 type="file"
                 accept="application/pdf"
                 required
+                disabled={!passcodeUnlocked}
                 onChange={handleFileChange}
                 className="hidden"
               />
               <label
-                htmlFor="file-upload-input"
-                className="flex-1 bg-[#090D11] hover:bg-[#1E293B]/30 border border-[#1E293B] hover:border-[#20B9BE] cursor-pointer rounded-xl px-4 py-2.5 text-sm text-[#94A3B8] hover:text-white transition-all text-center truncate font-medium"
+                htmlFor={passcodeUnlocked ? 'file-upload-input' : undefined}
+                className={`flex-1 border rounded-xl px-4 py-2.5 text-sm text-center truncate font-medium transition-all ${
+                  passcodeUnlocked
+                    ? 'bg-[#090D11] hover:bg-[#1E293B]/30 border-[#1E293B] hover:border-[#20B9BE] cursor-pointer text-[#94A3B8] hover:text-white'
+                    : 'bg-[#090D11]/50 border-[#1E293B]/40 cursor-not-allowed text-[#475569]'
+                }`}
               >
                 {file ? file.name : 'Choose file...'}
               </label>
               <button
                 type="submit"
-                disabled={uploading || !file}
-                className="bg-[#20B9BE] hover:bg-[#17878b] disabled:opacity-50 text-white rounded-xl px-6 py-2.5 text-sm font-semibold transition-all shadow-md shadow-[#20B9BE]/10"
+                disabled={uploading || !file || !passcodeUnlocked}
+                className="bg-[#20B9BE] hover:bg-[#17878b] disabled:opacity-50 disabled:cursor-not-allowed text-white rounded-xl px-6 py-2.5 text-sm font-semibold transition-all shadow-md shadow-[#20B9BE]/10"
               >
                 {uploading ? 'Uploading...' : 'Ingest'}
               </button>
