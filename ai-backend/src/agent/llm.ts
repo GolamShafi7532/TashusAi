@@ -63,7 +63,7 @@ async function tryGrok(prompt: string): Promise<string | null> {
         method: 'POST',
         headers: getGrokHeaders(key),
         body: JSON.stringify({
-          model: 'llama-3.3-70b-versatile',
+          model: 'gpt-oss-120b',
           messages: [{ role: 'user', content: prompt }],
           max_tokens: 512,
         }),
@@ -223,7 +223,7 @@ async function* tryGrokStream(
   if (dynamicContext?.trim()) systemMessages.push({ role: 'system', content: dynamicContext.trim() });
 
   const openAiMessages = [...systemMessages, ...convertAnthropicToOpenAi(messages)];
-  const grokModel = 'llama-3.3-70b-versatile';
+  const grokModel = 'gpt-oss-120b'; // Replaces deprecated llama-3.3-70b-versatile (Groq decommission Aug 16 2026)
 
   console.log(`[Grok] Starting stream: model=${grokModel}, tools=${tools.map(t => t.name).join(', ')||'none'}`);
 
