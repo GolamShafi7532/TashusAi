@@ -40,8 +40,8 @@ The Tashus AI Chatbot is a production-deployed, multi-component system providing
 - **Read-only** against the Tashus production API — no mutations, no bookings, no payments
 - **Stateless serverless backend** on Vercel with Redis for shared state across function invocations
 - **Streaming-first** — AI responses stream token-by-token via SSE; widget polls for admin messages
-- **Graceful degradation** — if LLM providers fail, tool-aware mock returns usable responses
-- **Human handoff** — keyword detection OR admin-initiated takeover pauses the AI circuit breaker
+- **Graceful degradation** — if all LLM providers fail, automatic human handoff triggers instead of mock responses
+- **Human handoff** — keyword detection OR admin-initiated takeover OR LLM exhaustion pauses the AI circuit breaker
 
 ---
 
@@ -52,14 +52,14 @@ The Tashus AI Chatbot is a production-deployed, multi-component system providing
 |---|---|---|---|
 | Framework | Next.js App Router | 14.2.35 | API routes only — no pages |
 | Language | TypeScript | 5.5.3 | Strict mode |
-| Primary LLM | Groq (llama-3.3-70b-versatile) | — | 6 API keys rotated via token bucket |
-| Fallback LLM | Anthropic Claude | @0.27.0 | Activated only when all Groq keys fail |
+| Primary LLM | Groq (gpt-oss-120b) | — | Replaces deprecated llama-3.3-70b-versatile (decommissioned Aug 16 2026) |
+| Fallback LLM | Anthropic claude-sonnet-4-5 | @0.27.0 | Activated only when all Groq keys fail |
 | Embeddings | OpenAI text-embedding-3-large | — | Mock provider used when key is dummy |
 | Database | Supabase (PostgreSQL + pgvector) | @2.44.4 | AI-only project, not Tashus main DB |
-| Cache / Pub-Sub | Redis via ioredis | @5.4.1 | Upstash (TLS `rediss://`) in production |
-| Job Queue | BullMQ | @5.8.1 | Requires `maxRetriesPerRequest: null` |
+| Cache / Pub-Sub | Redis via ioredis | @5.11.1 | Upstash (TLS `rediss://`) in production |
+| Job Queue | BullMQ | @5.80.2 | Requires `maxRetriesPerRequest: null` in worker |
 | PDF Parsing | pdf-parse | @1.1.1 | Worker process only |
-| Auth (admin) | jose (JWT) | @5.6.3 | HS256, 15min access / 7d refresh |
+| Auth (admin) | jose (JWT) | @6.2.3 | HS256, 15min access / 7d refresh |
 | Deployment | Vercel (serverless) | — | `tashus-ai-backend.bepario.com` |
 
 ### ai-admin (Next.js Dashboard)
@@ -67,10 +67,11 @@ The Tashus AI Chatbot is a production-deployed, multi-component system providing
 |---|---|---|
 | Framework | Next.js App Router | 14.2.4 |
 | UI | Tailwind CSS + custom dark theme | — |
-| Auth | argon2 → bcryptjs (production fix) | @3.0.3 |
+| Auth | argon2 → bcryptjs (serverless fix) | @3.0.3 |
 | Redis client | ioredis | @5.11.1 |
 | Icons | lucide-react | @1.24.0 |
-| Deployment | Vercel | `tashus-ai-admin.bepario.com` |
+| Validation | zod | @4.4.3 |
+| Deployment | Vercel (port 4001 local) | `tashus-ai-admin.bepario.com` |
 
 ### ai-widget (Embeddable Bundle)
 | Component | Technology | Version |
@@ -459,8 +460,6 @@ Prevents unnecessary embedding calls for transactional/greeting messages.
 | "what happens if I lose the vehicle?" | ✅ Yes | Policy keyword: `lost`, `what happens` |
 | "what is the cancellation policy?" | ✅ Yes | Policy keyword: `cancellation`, `what is` |
 | Any other 4+ word question | ✅ Yes | Default |
-
-### 6.3 System Prompt Loading
 
 The system prompt is **always loaded from the file** `src/agent/prompts/system-prompt.md`. The DB version is never used for the prompt — only for model/temperature/tools config. This ensures code changes take effect immediately without a DB update.
 

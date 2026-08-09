@@ -451,6 +451,8 @@ function parseRichContent(text: string) {
   );
 }
 
+const TEST_DISABLED = true;
+
 export default function TestChatPage() {
   const [testSessionId, setTestSessionId] = useState('test:session');
   const [messages, setMessages] = useState<Message[]>([]);
@@ -483,11 +485,13 @@ export default function TestChatPage() {
   };
 
   useEffect(() => {
+    if (TEST_DISABLED) return;
     scrollToBottom();
   }, [messages, streamingContent]);
 
   // v3.1.0: Fetch live token bucket status every 2s
   useEffect(() => {
+    if (TEST_DISABLED) return;
     const fetchKeyStatus = async () => {
       try {
         const res = await apiFetch('/api/admin/token-bucket');
@@ -513,8 +517,23 @@ export default function TestChatPage() {
   }, []);
 
   useEffect(() => {
+    if (TEST_DISABLED) return;
     setTestSessionId(`test:${generateId()}`);
   }, []);
+
+  if (TEST_DISABLED) {
+    return (
+      <div className="flex items-center justify-center h-[calc(100vh-10rem)]">
+        <div className="text-center max-w-md bg-[#0F161E] border border-[#1E293B] p-8 rounded-2xl">
+          <div className="text-6xl mb-6">🚧</div>
+          <h2 className="text-2xl font-bold text-white mb-3">Test Console Disabled</h2>
+          <p className="text-[#94A3B8] text-sm leading-relaxed">
+            The test chat console is currently disabled. It will be re-enabled for development and debugging use only.
+          </p>
+        </div>
+      </div>
+    );
+  }
 
   const handleSendMessage = async (text?: string) => {
     const messageText = text || inputValue.trim();

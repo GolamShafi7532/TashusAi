@@ -6,7 +6,7 @@ import Link from 'next/link';
 import { apiFetch } from '@/lib/apiFetch';
 import { usePathname, useRouter } from 'next/navigation';
 
-// v3.1.0: Token bucket cooldown alert component
+// Token bucket cooldown alert component
 function TokenCooldownAlert() {
   const [status, setStatus] = useState<any>(null);
   const [show, setShow] = useState(false);
@@ -40,6 +40,33 @@ function TokenCooldownAlert() {
 export default function AdminLayout({ children }: { children: React.ReactNode }) {
   const pathname = usePathname();
   const router = useRouter();
+  const [adminName, setAdminName] = useState('Admin User');
+
+  const loadAdminName = () => {
+    try {
+      const match = document.cookie.split(';').find(c => c.trim().startsWith('admin_access_token='));
+      if (match) {
+        const token = match.split('=').slice(1).join('=').trim();
+        const base64Url = token.split('.')[1];
+        if (base64Url) {
+          const base64 = base64Url.replace(/-/g, '+').replace(/_/g, '/');
+          const payload = JSON.parse(window.atob(base64));
+          if (payload.displayName || payload.name) {
+            setAdminName(payload.displayName || payload.name);
+          }
+        }
+      }
+    } catch (e) {
+      console.warn('Failed to parse admin JWT cookie:', e);
+    }
+  };
+
+  useEffect(() => {
+    loadAdminName();
+    const handleProfileUpdate = () => loadAdminName();
+    window.addEventListener('admin_profile_updated', handleProfileUpdate);
+    return () => window.removeEventListener('admin_profile_updated', handleProfileUpdate);
+  }, []);
 
   const handleLogout = async () => {
     try {
@@ -60,9 +87,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </svg>
       ),
     },
-     {
+    {
       name: 'Test Chat',
       href: '/test',
+      badge: '🚧',
+      disabled: true,
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9.663 17h4.673M12 3v1m6.364 1.636l-.707.707M21 12a9 9 0 11-18 0 9 9 0 0118 0zm-5.36 5.36l-.707.707M5.686 5.686l.707.707" />
@@ -99,6 +128,7 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     {
       name: 'Agent Config',
       href: '/config',
+      badge: '🔒',
       icon: (
         <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
           <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
@@ -106,7 +136,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </svg>
       ),
     },
-    
     {
       name: 'Token Bucket',
       href: '/token-bucket',
@@ -116,7 +145,16 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
         </svg>
       ),
     },
-   
+    {
+      name: 'Settings',
+      href: '/settings',
+      icon: (
+        <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M10.325 4.317c.426-1.756 2.924-1.756 3.35 0a1.724 1.724 0 002.573 1.066c1.543-.94 3.31.826 2.37 2.37a1.724 1.724 0 001.065 2.572c1.756.426 1.756 2.924 0 3.35a1.724 1.724 0 00-1.066 2.573c.94 1.543-.826 3.31-2.37 2.37a1.724 1.724 0 00-2.572 1.065c-.426 1.756-2.924 1.756-3.35 0a1.724 1.724 0 00-2.573-1.066c-1.543.94-3.31-.826-2.37-2.37a1.724 1.724 0 00-1.065-2.572c-1.756-.426-1.756-2.924 0-3.35a1.724 1.724 0 001.066-2.573c-.94-1.543.826-3.31 2.37-2.37.996.608 2.296.07 2.572-1.065z" />
+          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M15 12a3 3 0 11-6 0 3 3 0 016 0z" />
+        </svg>
+      ),
+    },
   ];
 
   return (
@@ -142,14 +180,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
                 <Link
                   key={item.name}
                   href={item.href}
-                  className={`flex items-center gap-3 px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
+                  className={`flex items-center justify-between px-4 py-3 rounded-xl text-sm font-semibold transition-all ${
                     isActive
                       ? 'bg-[#20B9BE] text-white shadow-lg shadow-[#20B9BE]/10'
+                      : item.disabled
+                      ? 'text-[#475569] hover:bg-[#1E293B]/30'
                       : 'text-[#94A3B8] hover:text-white hover:bg-[#1E293B]/50'
                   }`}
                 >
-                  {item.icon}
-                  <span>{item.name}</span>
+                  <div className="flex items-center gap-3">
+                    {item.icon}
+                    <span>{item.name}</span>
+                  </div>
+                  {item.badge && (
+                    <span className="text-xs">{item.badge}</span>
+                  )}
                 </Link>
               );
             })}
@@ -158,18 +203,18 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
 
         {/* User Footer / Logout */}
         <div className="p-4 border-t border-[#1E293B] flex items-center justify-between">
-          <div className="flex items-center gap-3">
-            <div className="w-9 h-9 rounded-full bg-[#1E293B] flex items-center justify-center text-sm font-bold text-white">
-              A
+          <div className="flex items-center gap-3 min-w-0">
+            <div className="w-9 h-9 rounded-full bg-[#20B9BE]/10 border border-[#20B9BE]/20 flex items-center justify-center text-xs font-bold text-[#20B9BE] flex-shrink-0">
+              {adminName.substring(0, 2).toUpperCase()}
             </div>
-            <div className="text-left">
-              <p className="text-xs font-bold text-white leading-tight">Admin User</p>
-              <p className="text-[10px] text-[#94A3B8]">Super Admin</p>
+            <div className="text-left min-w-0">
+              <p className="text-xs font-bold text-white leading-tight truncate">{adminName}</p>
+              <p className="text-[10px] text-[#94A3B8]">Admin</p>
             </div>
           </div>
           <button
             onClick={handleLogout}
-            className="p-2 text-[#94A3B8] hover:text-white hover:bg-[#1E293B] rounded-lg transition-all"
+            className="p-2 text-[#94A3B8] hover:text-white hover:bg-[#1E293B] rounded-lg transition-all shrink-0"
             title="Log Out"
           >
             <svg className="w-5 h-5" fill="none" viewBox="0 0 24 24" stroke="currentColor">
@@ -186,7 +231,6 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
             {pathname.split('/')[1]?.replace('-', ' ') || 'Dashboard'}
           </h2>
           <div className="flex items-center gap-4">
-            {/* v3.1.0: Token bucket cooldown alert in header */}
             <TokenCooldownAlert />
             <span className="inline-flex items-center gap-1.5 px-3 py-1 rounded-full text-xs font-semibold bg-emerald-500/10 border border-emerald-500/20 text-emerald-400">
               <span className="w-1.5 h-1.5 rounded-full bg-emerald-400 animate-pulse" />

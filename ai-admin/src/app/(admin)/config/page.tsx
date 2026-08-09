@@ -12,6 +12,8 @@ const AVAILABLE_TOOLS = [
   { name: 'get_user_bookings', description: 'Retrieve user booking history (read-only)' },
 ];
 
+const CONFIG_DISABLED = true;
+
 export default function AgentConfigPage() {
   const [config, setConfig] = useState<any>(null);
   const [loading, setLoading] = useState(true);
@@ -55,6 +57,7 @@ export default function AgentConfigPage() {
   }, []);
 
   const toggleTool = (toolName: string) => {
+    if (CONFIG_DISABLED) return;
     setEnabledTools((prev) =>
       prev.includes(toolName)
         ? prev.filter((t) => t !== toolName)
@@ -64,6 +67,7 @@ export default function AgentConfigPage() {
 
   const handleSave = async (e: React.FormEvent) => {
     e.preventDefault();
+    if (CONFIG_DISABLED) return;
     setSaving(true);
     setError('');
     setSuccess('');
@@ -122,6 +126,16 @@ export default function AgentConfigPage() {
         )}
       </div>
 
+      {CONFIG_DISABLED && (
+        <div className="p-4 rounded-xl bg-amber-500/10 border border-amber-500/20 text-amber-400 flex items-center gap-3">
+          <span className="text-xl">🔒</span>
+          <div>
+            <p className="font-semibold text-sm">Configuration Locked</p>
+            <p className="text-xs opacity-80">Agent configuration is managed via code deployment and system environment variables. Editing via UI is disabled.</p>
+          </div>
+        </div>
+      )}
+
       {loading ? (
         <div className="flex items-center justify-center h-64">
           <svg className="animate-spin h-8 w-8 text-[#20B9BE]" fill="none" viewBox="0 0 24 24">
@@ -130,6 +144,7 @@ export default function AgentConfigPage() {
           </svg>
         </div>
       ) : (
+        <fieldset disabled={CONFIG_DISABLED} className={CONFIG_DISABLED ? 'opacity-60 pointer-events-none select-none space-y-6' : 'space-y-6'}>
         <form onSubmit={handleSave} className="space-y-6">
           {error && (
             <div className="p-4 bg-red-500/10 border border-red-500/20 text-red-400 rounded-xl text-sm">
@@ -293,6 +308,7 @@ export default function AgentConfigPage() {
             </button>
           </div>
         </form>
+        </fieldset>
       )}
     </div>
   );

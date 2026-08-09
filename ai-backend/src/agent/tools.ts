@@ -208,7 +208,7 @@ export function getToolsForIntent(userText: string): ToolSchema[] {
   const hasPolicyKeywords = /\b(policy|rule|allow|permit|smoke|smoking|cancel|cancellation|insurance|excess|deposit|fee|age|limit|damage|accident|refund|penalty|late|extend|lost|lose|stolen|theft|broke|broken|scratch|fine|charge|liable|liability|responsible|document|agreement|term|condition|requirement|guideline|restriction|how does|how do|what is|what are|what will|what happens|can i|is it|do you|does tashus|if i|if the)\b/.test(t);
 
   // Vehicle search keywords — these queries need search tools, not KB
-  const hasSearchKeywords = /\b(suv|sedan|hatchback|ute|van|convertible|coupe|wagon|available|rent|hire|find|show me|book|sydney|melbourne|brisbane|perth|adelaide)\b/.test(t);
+  const hasSearchKeywords = /\b(car|cars|vehicle|vehicles|suv|suvs|sedan|sedans|hatchback|hatchbacks|ute|utes|van|vans|truck|trucks|convertible|convertibles|coupe|coupes|wagon|wagons|auto|automobile|available|availability|rent|rental|hire|find|show me|looking for|need|want|book|booking|sydney|melbourne|brisbane|perth|adelaide|gold coast|canberra|hobart|darwin|seats|seat|under|\$\d+|\d+\/day|\d+ per day)\b/i.test(t);
 
   // Pure policy: no search intent, has policy keywords → omit vehicle search tools
   if (hasPolicyKeywords && !hasSearchKeywords) {

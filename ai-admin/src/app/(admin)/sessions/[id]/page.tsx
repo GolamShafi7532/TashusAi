@@ -1,7 +1,7 @@
 'use strict';
 'use client';
 
-import React, { useState, useEffect, useRef } from 'react';
+import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/apiFetch';
 
@@ -108,6 +108,352 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
 
   const isPaused = session?.is_ai_paused;
 
+  /* ── Inline vehicle card styled for the dark admin UI ────────── */
+  const AdminVehicleCard = ({ v }: { v: any }) => {
+    const norm = (() => {
+      if (v.listingId !== undefined || v.coverPhotoUrl !== undefined || v.displayName !== undefined) {
+        return {
+          id: v.listingId ?? 0,
+          displayName: v.displayName ?? 'Vehicle',
+          dailyRate: v.dailyRate ?? 0,
+          seats: v.seats as number | undefined,
+          transmission: v.transmission as string | undefined,
+          carType: v.carType as string | undefined,
+          imageUrl: v.coverPhotoUrl ?? '',
+          locationLabel: v.location ? (v.location.city as string) : undefined as string | undefined,
+          hostRating: v.hostRating as number | undefined,
+        };
+      }
+      const name = [v.make, v.model, v.year ? `(${v.year})` : ''].filter(Boolean).join(' ');
+      return {
+        id: v.id ?? 0,
+        displayName: name || 'Vehicle',
+        dailyRate: v.dailyRate ?? 0,
+        seats: v.seats as number | undefined,
+        transmission: v.transmission as string | undefined,
+        carType: undefined as string | undefined,
+        imageUrl: v.imageUrl ?? '',
+        locationLabel: undefined as string | undefined,
+        hostRating: undefined as number | undefined,
+      };
+    })();
+
+    const rate = new Intl.NumberFormat('en-AU', {
+      style: 'currency', currency: 'AUD', maximumFractionDigits: 0,
+    }).format(norm.dailyRate);
+
+    const [hovered, setHovered] = useState(false);
+
+    return (
+      <div
+        onMouseEnter={() => setHovered(true)}
+        onMouseLeave={() => setHovered(false)}
+        style={{
+          width: '168px',
+          minWidth: '168px',
+          background: hovered ? 'rgba(255,255,255,0.06)' : 'rgba(255,255,255,0.03)',
+          border: hovered ? '1px solid rgba(32,185,190,0.45)' : '1px solid rgba(32,185,190,0.15)',
+          borderRadius: '12px',
+          overflow: 'hidden',
+          display: 'flex',
+          flexDirection: 'column',
+          transition: 'all 0.15s',
+          boxShadow: hovered ? '0 6px 20px rgba(32,185,190,0.18)' : '0 2px 8px rgba(0,0,0,0.25)',
+          transform: hovered ? 'translateY(-2px)' : 'none',
+          flexShrink: 0,
+          scrollSnapAlign: 'start',
+          cursor: 'default',
+        }}
+      >
+        {/* Image */}
+        <div style={{ position: 'relative', width: '100%', height: '90px', flexShrink: 0, background: '#0a1118' }}>
+          {norm.imageUrl ? (
+            <img
+              src={norm.imageUrl}
+              alt={norm.displayName}
+              style={{ width: '100%', height: '90px', objectFit: 'cover', display: 'block' }}
+              onError={(e) => {
+                (e.target as HTMLImageElement).src =
+                  'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=400&auto=format&fit=crop&q=60';
+              }}
+            />
+          ) : (
+            <div style={{
+              width: '100%', height: '90px',
+              display: 'flex', alignItems: 'center', justifyContent: 'center',
+              color: 'rgba(255,255,255,0.2)', fontSize: '10px',
+            }}>No image</div>
+          )}
+          {/* Gradient overlay */}
+          <div style={{
+            position: 'absolute', inset: 0,
+            background: 'linear-gradient(to top, rgba(0,0,0,0.82) 0%, transparent 55%)',
+            pointerEvents: 'none',
+          }} />
+          {/* Price badge */}
+          <div style={{
+            position: 'absolute', bottom: '5px', right: '5px',
+            background: 'rgba(0,0,0,0.85)',
+            backdropFilter: 'blur(4px)',
+            border: '1px solid rgba(32,185,190,0.25)',
+            borderRadius: '6px',
+            padding: '2px 6px',
+            fontSize: '10px', fontWeight: 800, color: '#fff', lineHeight: 1.4,
+          }}>
+            {rate}
+            <span style={{ fontSize: '8px', fontWeight: 500, color: 'rgba(255,255,255,0.5)', marginLeft: '1px' }}>/day</span>
+          </div>
+        </div>
+
+        {/* Details */}
+        <div style={{
+          flex: 1, padding: '8px 9px 9px',
+          display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden',
+        }}>
+          {/* Name */}
+          <div style={{
+            fontSize: '11px', fontWeight: 700, color: '#E4E6EB',
+            lineHeight: 1.35, height: '30px', overflow: 'hidden',
+            display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical',
+          }}>
+            {norm.displayName}
+          </div>
+
+          {/* Spec pills */}
+          <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px', minHeight: '18px' }}>
+            {norm.carType && (
+              <span style={{
+                fontSize: '8px', fontWeight: 700, textTransform: 'uppercase', letterSpacing: '0.04em',
+                color: '#20B9BE', background: 'rgba(32,185,190,0.12)', border: '1px solid rgba(32,185,190,0.2)',
+                padding: '2px 4px', borderRadius: '4px',
+              }}>{norm.carType}</span>
+            )}
+            {norm.seats && (
+              <span style={{
+                fontSize: '8px', color: 'rgba(228,230,235,0.55)', fontWeight: 500,
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+                padding: '2px 4px', borderRadius: '4px',
+              }}>👤 {norm.seats}</span>
+            )}
+            {norm.transmission && (
+              <span style={{
+                fontSize: '8px', color: 'rgba(228,230,235,0.55)', fontWeight: 500,
+                background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)',
+                padding: '2px 4px', borderRadius: '4px',
+              }}>{norm.transmission}</span>
+            )}
+          </div>
+
+          {/* Location + rating */}
+          <div style={{
+            display: 'flex', alignItems: 'center', justifyContent: 'space-between',
+            height: '14px', overflow: 'hidden',
+          }}>
+            {norm.locationLabel ? (
+              <span style={{
+                fontSize: '8px', color: 'rgba(148,163,184,0.7)',
+                overflow: 'hidden', textOverflow: 'ellipsis', whiteSpace: 'nowrap', maxWidth: '100px',
+              }}>📍 {norm.locationLabel}</span>
+            ) : <span />}
+            {norm.hostRating !== undefined && norm.hostRating > 0 && (
+              <span style={{ fontSize: '8px', color: '#f97316', fontWeight: 700, flexShrink: 0 }}>
+                ⭐ {norm.hostRating}
+              </span>
+            )}
+          </div>
+
+          {/* CTA */}
+          <button
+            style={{
+              width: '100%', marginTop: 'auto', padding: '6px 0',
+              background: 'linear-gradient(135deg, #20B9BE 0%, #17878b 100%)',
+              border: 'none', borderRadius: '8px',
+              color: '#fff', fontSize: '9px', fontWeight: 700, letterSpacing: '0.04em',
+              cursor: 'pointer', transition: 'opacity 0.15s', flexShrink: 0,
+            }}
+            onMouseEnter={e => { e.currentTarget.style.opacity = '0.82'; }}
+            onMouseLeave={e => { e.currentTarget.style.opacity = '1'; }}
+            onClick={() => window.open(`/search/${norm.id}/vehicle-details`, '_blank')}
+          >
+            View Details →
+          </button>
+        </div>
+      </div>
+    );
+  };
+
+  /* ── Vehicle row with custom scrollbar ───────────────────────── */
+  const AdminVehicleGroup = ({ vehicles }: { vehicles: any[] }) => {
+    const scrollRef = useRef<HTMLDivElement>(null);
+    const [thumbLeft, setThumbLeft] = useState(0);
+    const [thumbWidth, setThumbWidth] = useState(40);
+    const [isDragging, setIsDragging] = useState(false);
+    const dragStartX = useRef(0);
+    const dragStartScroll = useRef(0);
+
+    const updateThumb = useCallback(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const scrollable = el.scrollWidth - el.clientWidth;
+      const ratio = scrollable > 0 ? el.scrollLeft / scrollable : 0;
+      const trackW = el.clientWidth - 8;
+      const tw = Math.max(28, (el.clientWidth / (el.scrollWidth || 1)) * trackW);
+      setThumbWidth(tw);
+      setThumbLeft(ratio * (trackW - tw));
+    }, []);
+
+    useEffect(() => {
+      const el = scrollRef.current;
+      if (!el) return;
+      updateThumb();
+      el.addEventListener('scroll', updateThumb, { passive: true });
+      const ro = new ResizeObserver(updateThumb);
+      ro.observe(el);
+      return () => { el.removeEventListener('scroll', updateThumb); ro.disconnect(); };
+    }, [updateThumb]);
+
+    const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const track = e.currentTarget.getBoundingClientRect();
+      const ratio = (e.clientX - track.left) / track.width;
+      el.scrollLeft = ratio * (el.scrollWidth - el.clientWidth);
+    };
+
+    const onThumbMouseDown = (e: React.MouseEvent) => {
+      e.preventDefault();
+      e.stopPropagation();
+      setIsDragging(true);
+      dragStartX.current = e.clientX;
+      dragStartScroll.current = scrollRef.current?.scrollLeft ?? 0;
+    };
+
+    useEffect(() => {
+      if (!isDragging) return;
+      const onMove = (e: MouseEvent) => {
+        const el = scrollRef.current;
+        if (!el) return;
+        const dx = e.clientX - dragStartX.current;
+        const trackW = el.clientWidth - 8;
+        const scrollRange = el.scrollWidth - el.clientWidth;
+        el.scrollLeft = dragStartScroll.current + (dx / (trackW - thumbWidth)) * scrollRange;
+      };
+      const onUp = () => setIsDragging(false);
+      window.addEventListener('mousemove', onMove);
+      window.addEventListener('mouseup', onUp);
+      return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+    }, [isDragging, thumbWidth]);
+
+    const showScrollbar = vehicles.length > 1;
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '6px', width: '100%' }}>
+        <div
+          ref={scrollRef}
+          style={{
+            display: 'flex', flexDirection: 'row', flexWrap: 'nowrap',
+            overflowX: 'auto', gap: '10px', paddingBottom: '2px',
+            scrollSnapType: 'x mandatory',
+          }}
+          className="[&::-webkit-scrollbar]:hidden"
+        >
+          {vehicles.map((v: any, vi: number) => (
+            <AdminVehicleCard key={vi} v={v} />
+          ))}
+        </div>
+
+        {/* Custom scrollbar track */}
+        {showScrollbar && (
+          <div
+            onClick={onTrackClick}
+            style={{
+              position: 'relative',
+              height: '4px',
+              background: 'rgba(255,255,255,0.07)',
+              borderRadius: '999px',
+              margin: '0 4px',
+              cursor: 'pointer',
+              userSelect: 'none',
+            }}
+          >
+            <div
+              onMouseDown={onThumbMouseDown}
+              style={{
+                position: 'absolute',
+                top: 0,
+                left: `${thumbLeft}px`,
+                width: `${thumbWidth}px`,
+                height: '4px',
+                background: 'linear-gradient(90deg, #20B9BE, #17878b)',
+                borderRadius: '999px',
+                cursor: isDragging ? 'grabbing' : 'grab',
+                transition: isDragging ? 'none' : 'left 0.08s ease',
+                boxShadow: '0 0 6px rgba(32,185,190,0.45)',
+              }}
+            />
+          </div>
+        )}
+      </div>
+    );
+  };
+
+  /* ── Parse message content for VEHICLE tokens ────────────────── */
+  const parseAdminContent = (content: string): React.ReactNode => {
+    const regex = /\[VEHICLE:\s*(\{[\s\S]*?\})\]/g;
+
+    const parts: { type: string; val: any }[] = [];
+    let lastIndex = 0;
+    let match;
+    while ((match = regex.exec(content)) !== null) {
+      if (match.index > lastIndex) {
+        parts.push({ type: 'text', val: content.substring(lastIndex, match.index) });
+      }
+      try {
+        parts.push({ type: 'vehicle', val: JSON.parse(match[1]) });
+      } catch {
+        parts.push({ type: 'text', val: match[0] });
+      }
+      lastIndex = regex.lastIndex;
+    }
+    if (lastIndex < content.length) {
+      parts.push({ type: 'text', val: content.substring(lastIndex) });
+    }
+
+    // Group consecutive vehicle parts
+    const grouped: { type: string; val: any }[] = [];
+    let vehicleBuf: any[] = [];
+    for (const p of parts) {
+      if (p.type === 'vehicle') {
+        vehicleBuf.push(p.val);
+      } else {
+        if (vehicleBuf.length > 0) {
+          grouped.push({ type: 'vehicle_group', val: vehicleBuf });
+          vehicleBuf = [];
+        }
+        if (p.val.trim() !== '') grouped.push(p);
+      }
+    }
+    if (vehicleBuf.length > 0) grouped.push({ type: 'vehicle_group', val: vehicleBuf });
+
+    if (grouped.length === 0) {
+      return <span style={{ whiteSpace: 'pre-wrap' }}>{content}</span>;
+    }
+
+    return (
+      <div style={{ display: 'flex', flexDirection: 'column', gap: '8px', width: '100%' }}>
+        {grouped.map((p, i) => {
+          if (p.type === 'text') {
+            return <span key={i} style={{ whiteSpace: 'pre-wrap', lineHeight: 1.6, display: 'block' }}>{p.val}</span>;
+          }
+          if (p.type === 'vehicle_group') {
+            return <AdminVehicleGroup key={i} vehicles={p.val} />;
+          }
+          return null;
+        })}
+      </div>
+    );
+  };
+
   return (
     <div className="h-[calc(100vh-10rem)] flex flex-col bg-[#0F161E] border border-[#1E293B] rounded-2xl overflow-hidden shadow-2xl relative">
       {/* Detail Header controls */}
@@ -186,7 +532,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
                     </span>
                   </div>
 
-                  <p className="whitespace-pre-wrap leading-relaxed">{msg.content}</p>
+                  <div className="leading-relaxed">{parseAdminContent(msg.content)}</div>
 
                   {/* Rendering Tool Call Audit info if present */}
                   {msg.tool_calls && Array.isArray(msg.tool_calls) && msg.tool_calls.length > 0 && (

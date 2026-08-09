@@ -528,6 +528,260 @@ function InlineChatPanel({ sessionId, onClose, onUpdate }: {
 }
 
 // ═══════════════════════════════════════════════════════════════════════════
+// VEHICLE CARD & CONTENT PARSER
+// ═══════════════════════════════════════════════════════════════════════════
+
+function AdminVehicleCard({ vehicle }: { vehicle: any }) {
+  if (vehicle.type === 'view_more') {
+    return (
+      <div
+        style={{
+          width: '140px',
+          minWidth: '140px',
+          height: '200px',
+          background: 'rgba(32,185,190,0.04)',
+          border: '1.5px dashed rgba(32,185,190,0.3)',
+          borderRadius: '12px',
+          display: 'flex',
+          flexDirection: 'column',
+          alignItems: 'center',
+          justifyContent: 'center',
+          gap: '8px',
+          padding: '12px',
+          cursor: 'pointer',
+          flexShrink: 0,
+        }}
+      >
+        <div style={{
+          width: '40px', height: '40px', borderRadius: '50%',
+          background: 'rgba(32,185,190,0.12)', border: '1.5px solid rgba(32,185,190,0.3)',
+          display: 'flex', alignItems: 'center', justifyContent: 'center',
+          fontSize: '12px', fontWeight: 800, color: '#20B9BE',
+        }}>
+          +{vehicle.remaining ?? 0}
+        </div>
+        <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff', textAlign: 'center' }}>More vehicles</div>
+        <div style={{ fontSize: '9px', color: '#94A3B8', textAlign: 'center' }}>See all on Tashus</div>
+      </div>
+    );
+  }
+
+  const name = vehicle.displayName || [vehicle.make, vehicle.model].filter(Boolean).join(' ') || 'Vehicle';
+  const img = vehicle.coverPhotoUrl || vehicle.imageUrl;
+  const price = vehicle.dailyRate ? `$${vehicle.dailyRate}/day` : '';
+  const city = vehicle.location?.city || '';
+
+  return (
+    <div
+      style={{
+        width: '140px',
+        minWidth: '140px',
+        height: '200px',
+        background: '#090D11',
+        border: '1px solid #1E293B',
+        borderRadius: '12px',
+        overflow: 'hidden',
+        display: 'flex',
+        flexDirection: 'column',
+        flexShrink: 0,
+        transition: 'border-color 0.15s',
+      }}
+      onMouseEnter={e => (e.currentTarget.style.borderColor = 'rgba(32,185,190,0.4)')}
+      onMouseLeave={e => (e.currentTarget.style.borderColor = '#1E293B')}
+    >
+      {/* Image */}
+      <div style={{ position: 'relative', width: '100%', height: '76px', background: '#1E293B', flexShrink: 0 }}>
+        {img ? (
+          <img
+            src={img}
+            alt={name}
+            style={{ width: '100%', height: '76px', objectFit: 'cover', display: 'block' }}
+            onError={(e) => {
+              (e.target as HTMLImageElement).src = 'https://images.unsplash.com/photo-1549399542-7e3f8b79c341?w=400&auto=format&fit=crop&q=60';
+            }}
+          />
+        ) : (
+          <div style={{ width: '100%', height: '76px', display: 'flex', alignItems: 'center', justifyContent: 'center', fontSize: '10px', color: '#475569' }}>No image</div>
+        )}
+        {/* gradient overlay */}
+        <div style={{ position: 'absolute', inset: 0, background: 'linear-gradient(to top, rgba(0,0,0,0.6) 0%, transparent 55%)', pointerEvents: 'none' }} />
+        {price && (
+          <span style={{
+            position: 'absolute', bottom: '4px', right: '4px',
+            background: 'rgba(0,0,0,0.8)', color: '#fff',
+            fontSize: '9px', fontWeight: 800, padding: '2px 5px', borderRadius: '5px',
+          }}>{price}</span>
+        )}
+      </div>
+
+      {/* Details */}
+      <div style={{ padding: '7px 8px 8px', flex: 1, display: 'flex', flexDirection: 'column', gap: '4px', overflow: 'hidden' }}>
+        <div style={{ fontSize: '10px', fontWeight: 700, color: '#fff', lineHeight: 1.3, height: '26px', overflow: 'hidden', display: '-webkit-box', WebkitLineClamp: 2, WebkitBoxOrient: 'vertical' }}>
+          {name}
+        </div>
+        <div style={{ display: 'flex', flexWrap: 'wrap', gap: '3px' }}>
+          {vehicle.carType && (
+            <span style={{ fontSize: '8px', fontWeight: 700, textTransform: 'uppercase', color: '#20B9BE', background: 'rgba(32,185,190,0.1)', border: '1px solid rgba(32,185,190,0.2)', padding: '1px 4px', borderRadius: '4px' }}>{vehicle.carType}</span>
+          )}
+          {vehicle.seats && (
+            <span style={{ fontSize: '8px', color: '#94A3B8', background: 'rgba(255,255,255,0.05)', border: '1px solid rgba(255,255,255,0.08)', padding: '1px 4px', borderRadius: '4px' }}>👥 {vehicle.seats}</span>
+          )}
+        </div>
+        <div style={{ display: 'flex', alignItems: 'center', justifyContent: 'space-between', marginTop: 'auto' }}>
+          {city ? <span style={{ fontSize: '8px', color: '#20B9BE', fontWeight: 600 }}>📍 {city}</span> : <span />}
+          {vehicle.hostRating ? <span style={{ fontSize: '8px', color: '#f59e0b', fontWeight: 700 }}>⭐ {vehicle.hostRating}</span> : null}
+        </div>
+      </div>
+    </div>
+  );
+}
+
+function AdminVehicleRow({ vehicles }: { vehicles: any[] }) {
+  const scrollRef = React.useRef<HTMLDivElement>(null);
+  const [thumbLeft, setThumbLeft] = React.useState(0);
+  const [thumbWidth, setThumbWidth] = React.useState(40);
+  const [isDragging, setIsDragging] = React.useState(false);
+  const dragStartX = React.useRef(0);
+  const dragStartScroll = React.useRef(0);
+
+  const updateThumb = React.useCallback(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    const scrollable = el.scrollWidth - el.clientWidth;
+    const ratio = scrollable > 0 ? el.scrollLeft / scrollable : 0;
+    const trackW = el.clientWidth - 8;
+    const tw = Math.max(24, (el.clientWidth / (el.scrollWidth || 1)) * trackW);
+    setThumbWidth(tw);
+    setThumbLeft(ratio * (trackW - tw));
+  }, []);
+
+  React.useEffect(() => {
+    const el = scrollRef.current;
+    if (!el) return;
+    updateThumb();
+    el.addEventListener('scroll', updateThumb, { passive: true });
+    const ro = new ResizeObserver(updateThumb);
+    ro.observe(el);
+    return () => { el.removeEventListener('scroll', updateThumb); ro.disconnect(); };
+  }, [updateThumb]);
+
+  React.useEffect(() => {
+    if (!isDragging) return;
+    const onMove = (e: MouseEvent) => {
+      const el = scrollRef.current;
+      if (!el) return;
+      const dx = e.clientX - dragStartX.current;
+      const trackW = el.clientWidth - 8;
+      const scrollRange = el.scrollWidth - el.clientWidth;
+      el.scrollLeft = dragStartScroll.current + (dx / (trackW - thumbWidth)) * scrollRange;
+    };
+    const onUp = () => setIsDragging(false);
+    window.addEventListener('mousemove', onMove);
+    window.addEventListener('mouseup', onUp);
+    return () => { window.removeEventListener('mousemove', onMove); window.removeEventListener('mouseup', onUp); };
+  }, [isDragging, thumbWidth]);
+
+  const showScrollbar = vehicles.filter(v => v.type !== 'view_more').length > 2;
+
+  return (
+    <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', width: '100%', maxWidth: '480px' }}>
+      <div
+        ref={scrollRef}
+        style={{
+          display: 'flex', flexDirection: 'row', flexWrap: 'nowrap',
+          overflowX: 'auto', gap: '8px', paddingBottom: '2px',
+          scrollSnapType: 'x mandatory',
+          msOverflowStyle: 'none',
+          scrollbarWidth: 'none',
+        } as React.CSSProperties}
+      >
+        {vehicles.map((v: any, vi: number) => (
+          <div key={vi} style={{ scrollSnapAlign: 'start', flexShrink: 0 }}>
+            <AdminVehicleCard vehicle={v} />
+          </div>
+        ))}
+      </div>
+      {showScrollbar && (
+        <div
+          onClick={(e) => {
+            const el = scrollRef.current;
+            if (!el) return;
+            const rect = e.currentTarget.getBoundingClientRect();
+            const ratio = (e.clientX - rect.left) / rect.width;
+            el.scrollLeft = ratio * (el.scrollWidth - el.clientWidth);
+          }}
+          style={{ position: 'relative', height: '3px', background: 'rgba(32,185,190,0.1)', borderRadius: '999px', margin: '0 4px', cursor: 'pointer', userSelect: 'none' }}
+        >
+          <div
+            onMouseDown={(e) => {
+              e.preventDefault(); e.stopPropagation();
+              setIsDragging(true);
+              dragStartX.current = e.clientX;
+              dragStartScroll.current = scrollRef.current?.scrollLeft ?? 0;
+            }}
+            style={{
+              position: 'absolute', top: 0, left: `${thumbLeft}px`, width: `${thumbWidth}px`,
+              height: '3px', background: 'linear-gradient(90deg,#20B9BE,#17a0a5)',
+              borderRadius: '999px', cursor: isDragging ? 'grabbing' : 'grab',
+              transition: isDragging ? 'none' : 'left 0.08s ease',
+              boxShadow: '0 0 4px rgba(32,185,190,0.4)',
+            }}
+          />
+        </div>
+      )}
+    </div>
+  );
+}
+
+function renderFormattedContent(content: string) {
+  if (!content) return null;
+  const regex = /\[VEHICLE:\s*(\{.*?\})\]/g;
+  const parts: { type: string; data: any }[] = [];
+  let lastIndex = 0;
+  let match;
+
+  while ((match = regex.exec(content)) !== null) {
+    if (match.index > lastIndex) {
+      parts.push({ type: 'text', data: content.substring(lastIndex, match.index) });
+    }
+    try {
+      parts.push({ type: 'vehicle', data: JSON.parse(match[1]) });
+    } catch {
+      parts.push({ type: 'text', data: match[0] });
+    }
+    lastIndex = regex.lastIndex;
+  }
+  if (lastIndex < content.length) {
+    parts.push({ type: 'text', data: content.substring(lastIndex) });
+  }
+  if (parts.length === 0) return <span className="whitespace-pre-wrap">{content}</span>;
+
+  // Group consecutive vehicle parts into rows
+  const grouped: { type: string; data: any }[] = [];
+  let vehicleBuf: any[] = [];
+  for (const p of parts) {
+    if (p.type === 'vehicle') {
+      vehicleBuf.push(p.data);
+    } else {
+      if (p.type === 'text' && p.data.trim() === '') continue;
+      if (vehicleBuf.length > 0) { grouped.push({ type: 'vehicle_row', data: vehicleBuf }); vehicleBuf = []; }
+      grouped.push(p);
+    }
+  }
+  if (vehicleBuf.length > 0) grouped.push({ type: 'vehicle_row', data: vehicleBuf });
+
+  return (
+    <div className="space-y-1.5">
+      {grouped.map((part, idx) => {
+        if (part.type === 'text') return <span key={idx} className="whitespace-pre-wrap block">{part.data}</span>;
+        if (part.type === 'vehicle_row') return <AdminVehicleRow key={idx} vehicles={part.data} />;
+        return null;
+      })}
+    </div>
+  );
+}
+
+// ═══════════════════════════════════════════════════════════════════════════
 // MESSAGE BUBBLE COMPONENT
 // ═══════════════════════════════════════════════════════════════════════════
 
@@ -536,7 +790,7 @@ function MsgBubble({ message }: { message: Message }) {
     return (
       <div className="flex justify-center">
         <div className="bg-[#1E293B] border border-[#334155] rounded-lg px-4 py-2 text-xs text-[#94A3B8] max-w-md text-center">
-          {message.content}
+          {renderFormattedContent(message.content)}
         </div>
       </div>
     );
@@ -546,7 +800,7 @@ function MsgBubble({ message }: { message: Message }) {
     return (
       <div className="flex justify-end">
         <div className="bg-[#20B9BE]/10 border border-[#20B9BE]/20 rounded-lg px-4 py-2 text-sm text-white max-w-md">
-          {message.content}
+          {renderFormattedContent(message.content)}
         </div>
       </div>
     );
@@ -555,9 +809,9 @@ function MsgBubble({ message }: { message: Message }) {
   if (message.role === 'assistant') {
     return (
       <div className="flex justify-start">
-        <div className="bg-[#0F161E] border border-[#1E293B] rounded-lg px-4 py-2 text-sm text-white max-w-md">
+        <div className="bg-[#0F161E] border border-[#1E293B] rounded-lg px-4 py-2 text-sm text-white max-w-xl">
           <div className="text-[10px] text-[#20B9BE] font-semibold mb-1">AI</div>
-          {message.content}
+          {renderFormattedContent(message.content)}
         </div>
       </div>
     );
@@ -566,11 +820,11 @@ function MsgBubble({ message }: { message: Message }) {
   if (message.role === 'admin') {
     return (
       <div className="flex justify-start">
-        <div className="bg-[#F2994A]/10 border border-[#F2994A]/20 rounded-lg px-4 py-2 text-sm text-white max-w-md">
+        <div className="bg-[#F2994A]/10 border border-[#F2994A]/20 rounded-lg px-4 py-2 text-sm text-white max-w-xl">
           <div className="text-[10px] text-[#F2994A] font-semibold mb-1">
             {message.admin_name || 'Admin'}
           </div>
-          {message.content}
+          {renderFormattedContent(message.content)}
         </div>
       </div>
     );

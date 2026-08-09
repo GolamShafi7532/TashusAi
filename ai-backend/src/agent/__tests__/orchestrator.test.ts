@@ -113,10 +113,11 @@ jest.mock('@/db/client', () => ({
 jest.mock('@/rag/retriever', () => ({
   retrieve: jest.fn().mockResolvedValue({
     context: 'Mocked context',
-    sources: [{ title: 'Doc A', page: 1 }],
+    sources: [{ type: 'document', content: 'Mocked context', label: '[SOURCE: Doc A]' }],
   }),
   searchKnowledgeBaseTool: jest.fn().mockResolvedValue('KB result'),
 }));
+
 
 const mockExecuteTool = jest.fn().mockResolvedValue({ available: true });
 jest.mock('@/agent/tools', () => ({
@@ -125,7 +126,12 @@ jest.mock('@/agent/tools', () => ({
     { name: 'search_vehicles', description: 'desc', input_schema: {} },
     { name: 'check_availability', description: 'desc', input_schema: {} },
   ],
+  getToolsForIntent: (_text: string) => [
+    { name: 'search_vehicles', description: 'desc', input_schema: {} },
+    { name: 'check_availability', description: 'desc', input_schema: {} },
+  ],
 }));
+
 
 const mockGenerateStream = jest.fn();
 jest.mock('@/agent/llm', () => ({
@@ -160,19 +166,22 @@ describe('Orchestrator — processMessageStream', () => {
     }
 
     expect(events).toEqual([
-      { type: 'token', text: 'Hello' },
-      { type: 'token', text: ' world!' },
+      {
+        type: 'token',
+        text: 'Hello world!',
+      },
       {
         type: 'done',
         message: 'Hello world!',
-        sources: [{ title: 'Doc A', page: 1 }],
+        sources: [],
       },
     ]);
 
     // DB calls: user message insert, config loading, assistant message insert
+    // Note: 'session-123' is not a UUID, so the orchestrator sanitises dbSessionId to null
     expect(mockInsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        session_id: 'session-123',
+        session_id: null,
         role: 'user',
         content: 'Hi',
       })
@@ -180,7 +189,7 @@ describe('Orchestrator — processMessageStream', () => {
 
     expect(mockInsert).toHaveBeenCalledWith(
       expect.objectContaining({
-        session_id: 'session-123',
+        session_id: null,
         role: 'assistant',
         content: 'Hello world!',
       })
@@ -217,7 +226,7 @@ describe('Orchestrator — processMessageStream', () => {
       {
         type: 'done',
         message: 'Yes, it is available.',
-        sources: [{ title: 'Doc A', page: 1 }],
+        sources: [{ type: 'document', content: 'Mocked context', label: '[SOURCE: Doc A]' }],
       },
     ]);
 

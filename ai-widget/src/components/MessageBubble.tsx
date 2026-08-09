@@ -1,5 +1,6 @@
 'use strict';
-import React from 'react';
+import React, { useRef, useState, useCallback, useEffect } from 'react';
+
 import type { ChatMessage } from '../lib/types';
 import StreamingCursor from './StreamingCursor';
 import VehicleResultCard from './VehicleResultCard';
@@ -299,37 +300,142 @@ export default function MessageBubble({ message }: { message: ChatMessage }) {
             );
           }
           if (p.type === 'vehicle_group') {
-            return (
-              <div
-                key={i}
-                style={{
-                  display: 'flex',
-                  flexDirection: 'row',
-                  flexWrap: 'nowrap',
-                  overflowX: 'auto',
-                  gap: '10px',
-                  paddingBottom: '4px',
-                  scrollSnapType: 'x mandatory',
-                  msOverflowStyle: 'none',
-                  scrollbarWidth: 'none',
-                }}
-              >
-                {p.val.map((v: any, vi: number) => (
+            /* ── Carousel with custom scrollbar ── */
+            const VehicleCarousel = () => {
+              const scrollRef = useRef<HTMLDivElement>(null);
+              const [thumbLeft, setThumbLeft] = useState(0);
+              const [thumbWidth, setThumbWidth] = useState(40);
+              const [isDragging, setIsDragging] = useState(false);
+              const dragStartX = useRef(0);
+              const dragStartScroll = useRef(0);
+
+              const updateThumb = useCallback(() => {
+                const el = scrollRef.current;
+                if (!el) return;
+                const scrollable = el.scrollWidth - el.clientWidth;
+                const ratio = scrollable > 0 ? el.scrollLeft / scrollable : 0;
+                const trackW = el.clientWidth - 8;
+                const tw = Math.max(24, (el.clientWidth / (el.scrollWidth || 1)) * trackW);
+                setThumbWidth(tw);
+                setThumbLeft(ratio * (trackW - tw));
+              }, []);
+
+              useEffect(() => {
+                const el = scrollRef.current;
+                if (!el) return;
+                updateThumb();
+                el.addEventListener('scroll', updateThumb, { passive: true });
+                const ro = new ResizeObserver(updateThumb);
+                ro.observe(el);
+                return () => { el.removeEventListener('scroll', updateThumb); ro.disconnect(); };
+              }, [updateThumb]);
+
+              const onTrackClick = (e: React.MouseEvent<HTMLDivElement>) => {
+                const el = scrollRef.current;
+                if (!el) return;
+                const rect = e.currentTarget.getBoundingClientRect();
+                const ratio = (e.clientX - rect.left) / rect.width;
+                el.scrollLeft = ratio * (el.scrollWidth - el.clientWidth);
+              };
+
+              const onThumbMouseDown = (e: React.MouseEvent) => {
+                e.preventDefault();
+                e.stopPropagation();
+                setIsDragging(true);
+                dragStartX.current = e.clientX;
+                dragStartScroll.current = scrollRef.current?.scrollLeft ?? 0;
+              };
+
+              useEffect(() => {
+                if (!isDragging) return;
+                const onMove = (e: MouseEvent) => {
+                  const el = scrollRef.current;
+                  if (!el) return;
+                  const dx = e.clientX - dragStartX.current;
+                  const trackW = el.clientWidth - 8;
+                  const scrollRange = el.scrollWidth - el.clientWidth;
+                  el.scrollLeft = dragStartScroll.current + (dx / (trackW - thumbWidth)) * scrollRange;
+                };
+                const onUp = () => setIsDragging(false);
+                window.addEventListener('mousemove', onMove);
+                window.addEventListener('mouseup', onUp);
+                return () => {
+                  window.removeEventListener('mousemove', onMove);
+                  window.removeEventListener('mouseup', onUp);
+                };
+              }, [isDragging, thumbWidth]);
+
+              const showScrollbar = p.val.length > 1;
+
+              return (
+                <div style={{ display: 'flex', flexDirection: 'column', gap: '5px', width: '100%' }}>
+                  {/* Card row */}
                   <div
-                    key={vi}
+                    ref={scrollRef}
                     style={{
-                      width: '158px',
-                      minWidth: '158px',
-                      maxWidth: '158px',
-                      flexShrink: 0,
-                      scrollSnapAlign: 'start',
+                      display: 'flex',
+                      flexDirection: 'row',
+                      flexWrap: 'nowrap',
+                      overflowX: 'auto',
+                      gap: '10px',
+                      paddingBottom: '2px',
+                      scrollSnapType: 'x mandatory',
+                      msOverflowStyle: 'none',
+                      scrollbarWidth: 'none',
                     }}
                   >
-                    <VehicleResultCard vehicle={v} />
+                    {p.val.map((v: any, vi: number) => (
+                      <div
+                        key={vi}
+                        style={{
+                          width: '158px',
+                          minWidth: '158px',
+                          maxWidth: '158px',
+                          flexShrink: 0,
+                          scrollSnapAlign: 'start',
+                        }}
+                      >
+                        <VehicleResultCard vehicle={v} />
+                      </div>
+                    ))}
                   </div>
-                ))}
-              </div>
-            );
+
+                  {/* Custom scrollbar */}
+                  {showScrollbar && (
+                    <div
+                      onClick={onTrackClick}
+                      style={{
+                        position: 'relative',
+                        height: '4px',
+                        background: 'rgba(128,19,127,0.1)',
+                        borderRadius: '999px',
+                        margin: '0 4px',
+                        cursor: 'pointer',
+                        userSelect: 'none',
+                      }}
+                    >
+                      <div
+                        onMouseDown={onThumbMouseDown}
+                        style={{
+                          position: 'absolute',
+                          top: 0,
+                          left: `${thumbLeft}px`,
+                          width: `${thumbWidth}px`,
+                          height: '4px',
+                          background: 'linear-gradient(90deg, #80137f, #9d1b9c)',
+                          borderRadius: '999px',
+                          cursor: isDragging ? 'grabbing' : 'grab',
+                          transition: isDragging ? 'none' : 'left 0.08s ease',
+                          boxShadow: '0 0 5px rgba(128,19,127,0.35)',
+                        }}
+                      />
+                    </div>
+                  )}
+                </div>
+              );
+            };
+            return <VehicleCarousel key={i} />;
+
           }
           if (p.type === 'voucher') {
             return <VoucherResultCard key={i} voucher={p.val} />;

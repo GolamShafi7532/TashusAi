@@ -1,25 +1,14 @@
 import { NextResponse } from 'next/server';
-import { db, isLocalDevMode } from '@/lib/supabase';
-import { verifyJwt } from '@/lib/auth';
+import { db } from '@/lib/supabase';
+import { resolveAdmin } from '@/lib/auth';
 
 export const dynamic = 'force-dynamic';
 
 const TOKEN_COST: Record<string, { prompt: number; completion: number }> = {
-  groq:       { prompt: 0.59  / 1_000_000, completion: 0.79  / 1_000_000 },
-  openrouter: { prompt: 0.88  / 1_000_000, completion: 0.88  / 1_000_000 },
-  anthropic:  { prompt: 3.00  / 1_000_000, completion: 15.00 / 1_000_000 },
+  groq:       { prompt: 0.15  / 1_000_000, completion: 0.60  / 1_000_000 }, // gpt-oss-120b
+  openrouter: { prompt: 0.15  / 1_000_000, completion: 0.60  / 1_000_000 }, // gpt-oss-120b
+  anthropic:  { prompt: 3.00  / 1_000_000, completion: 15.00 / 1_000_000 }, // claude-sonnet-4-5
 };
-
-async function resolveAdmin(req: Request) {
-  if (isLocalDevMode()) {
-    return { userId: 'local-dev-admin', email: 'dev@local', role: 'super_admin' };
-  }
-  const token = req.headers.get('cookie')
-    ?.split(';')
-    .find((c) => c.trim().startsWith('admin_access_token='))
-    ?.split('=')[1];
-  return token ? await verifyJwt(token) : null;
-}
 
 function dateRange(from: Date, to: Date): string[] {
   const dates: string[] = [];

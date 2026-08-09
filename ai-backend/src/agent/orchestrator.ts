@@ -99,17 +99,18 @@ function intentNeedsRag(text: string): boolean {
 
   // Pure vehicle search / booking transactional intent — tools handle it, no RAG
   const transactionalPattern =
-    /\b(book|rent|reserve|hire|available|availability|pickup|return|voucher|discount|code|promo)\b/i;
+    /\b(book|booking|rent|rental|reserve|reservation|hire|available|availability|pickup|return|voucher|discount|code|promo)\b/i;
   if (transactionalPattern.test(t)) return false;
 
-  // Vehicle search intent — "i need a car/suv/vehicle", "find me a van under $60", etc.
+  // Vehicle search intent — "i need a car/suv/vehicle", "find me a van under $60", "vehicle under 60 with 5 seats", etc.
   const vehicleSearchPattern =
-    /\b(i need|show me|find me|get me|looking for|want)\b.{0,40}\b(car|vehicle|suv|sedan|hatchback|ute|van|truck|convertible|coupe|wagon)\b/i;
+    /\b(i need|i want|show me|find me|get me|looking for|want|need|search|search for|any)\b.{0,60}\b(car|cars|vehicle|vehicles|suv|suvs|sedan|sedans|hatchback|hatchbacks|ute|utes|van|vans|truck|trucks|convertible|convertibles|coupe|coupes|wagon|wagons)\b/i;
   if (vehicleSearchPattern.test(t)) return false;
 
-  // Vehicle type words alone don't need RAG — they trigger search_vehicles tool
-  const vehicleTypeOnly = /^(i need |show me |find me |get me )?(a |an |some )?(suv|sedan|hatchback|ute|van|convertible|coupe|wagon|car|vehicle|truck)s?(\s+in\s+\w+)?(\s+under\s+\$?\d+)?$/i;
-  if (vehicleTypeOnly.test(t)) return false;
+  // Vehicle specification queries (under $60, seats, etc.)
+  const vehicleSpecQuery =
+    /\b(car|cars|vehicle|vehicles|suv|suvs|sedan|sedans|hatchback|hatchbacks|ute|utes|van|vans)\b.{0,60}\b(under|below|\$|\d+ seats|\d+ seat|seats|seat)\b/i;
+  if (vehicleSpecQuery.test(t)) return false;
 
   // Explicit policy / FAQ / support signals → always needs RAG
   const policyPattern =

@@ -162,8 +162,8 @@ export default function AnalyticsPage() {
   const fetchOverview = useCallback(async () => {
     try {
       const [overviewRes, toolRes] = await Promise.all([
-        fetch('/api/admin/analytics/overview'),
-        fetch('/api/admin/audit/tool-calls'),
+        apiFetch('/api/admin/analytics/overview'),
+        apiFetch('/api/admin/audit/tool-calls'),
       ]);
       if (overviewRes.ok) {
         const data = await overviewRes.json();
