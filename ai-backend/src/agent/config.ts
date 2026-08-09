@@ -5,7 +5,7 @@ import { redis } from '@/lib/redis';
 const AGENT_CONFIG_CACHE_KEY = 'agent-config:active';
 import { join } from 'path';
 const PROMPT_FILE = join(process.cwd(), 'src/agent/prompts/system-prompt.md');
-const DEFAULT_MODEL = 'gpt-oss-120b'; // Groq replacement for deprecated llama-3.3-70b-versatile (decommissioned Aug 16 2026)
+const DEFAULT_MODEL = 'openai/gpt-oss-120b'; // Groq model ID — requires openai/ prefix
 const DEFAULT_ENABLED_TOOLS = [
   'search_vehicles',
   'get_vehicle_details',
