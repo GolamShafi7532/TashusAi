@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import { useVisibilityInterval } from '@/hooks/useVisibilityInterval';
 
 interface KeyStatus {
   index: number;
@@ -81,10 +82,9 @@ export default function TokenBucketPage() {
 
   useEffect(() => {
     refresh();
-    if (!autoRefresh) return;
-    const interval = setInterval(refresh, 10000);
-    return () => clearInterval(interval);
-  }, [autoRefresh, refresh]);
+  }, [refresh]);
+
+  useVisibilityInterval(refresh, autoRefresh ? 30000 : null);
 
   const handleAddKey = async (e: React.FormEvent) => {
     e.preventDefault();

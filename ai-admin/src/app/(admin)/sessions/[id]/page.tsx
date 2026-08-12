@@ -4,6 +4,7 @@
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { useRouter } from 'next/navigation';
 import { apiFetch } from '@/lib/apiFetch';
+import { useVisibilityInterval } from '@/hooks/useVisibilityInterval';
 
 export default function SessionDetailPage({ params }: { params: { id: string } }) {
   const { id: sessionId } = params;
@@ -16,8 +17,7 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
   const [composerText, setComposerText] = useState('');
   const [sending, setSending] = useState(false);
 
-  // Poll for messages and session status every 2 seconds
-  const fetchSessionDetails = async (showLoading = false) => {
+  const fetchSessionDetails = useCallback(async (showLoading = false) => {
     if (showLoading) setLoading(true);
     try {
       const res = await apiFetch(`/api/admin/sessions/${sessionId}`);
@@ -44,17 +44,18 @@ export default function SessionDetailPage({ params }: { params: { id: string } }
     } finally {
       if (showLoading) setLoading(false);
     }
-  };
+  }, [sessionId, router]);
 
   useEffect(() => {
     fetchSessionDetails(true);
+  }, [fetchSessionDetails]);
 
-    const interval = setInterval(() => {
-      fetchSessionDetails(false);
-    }, 2000);
+  const handleSyncSilent = useCallback(() => {
+    fetchSessionDetails(false);
+  }, [fetchSessionDetails]);
 
-    return () => clearInterval(interval);
-  }, [sessionId]);
+  // Poll for messages/status every 10s when active tab, pause when tab is hidden
+  useVisibilityInterval(handleSyncSilent, 10000);
 
   // Scroll to bottom on load and new messages
   useEffect(() => {

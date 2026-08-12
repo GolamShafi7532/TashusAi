@@ -175,37 +175,62 @@ export async function getBucketStatus(): Promise<BucketStatus> {
   }
 
   const keys = getAllKeys();
+  if (keys.length === 0) {
+    return {
+      keys: [],
+      availableCount: 0,
+      totalKeys: 0,
+      allCoolingDown: false,
+      nextAvailableIn: 0,
+    };
+  }
 
-  const statuses: KeyStatus[] = await Promise.all(
-    keys.map(async (key, idx): Promise<KeyStatus> => {
-      const masked = maskKey(key);
-      const [cooldownVal, failures, successes] = await Promise.all([
-        redis.get(cooldownKey(masked)).catch(() => null),
-        redis.get(failureKey(masked)).catch(() => null),
-        redis.get(successKey(masked)).catch(() => null),
-      ]);
+  // Batch fetch all cooldown, failure, and success keys in a single MGET call
+  const maskedKeys = keys.map((k) => maskKey(k));
+  const redisKeysToFetch: string[] = [];
+  maskedKeys.forEach((masked) => {
+    redisKeysToFetch.push(cooldownKey(masked), failureKey(masked), successKey(masked));
+  });
 
-      let cooldownSeconds = 0;
-      let cooldownReason: string | null = null;
+  const mgetValues = await redis.mget(...redisKeysToFetch).catch(() => []);
 
-      if (cooldownVal !== null) {
-        // Get TTL for remaining seconds
-        const ttl = await redis.ttl(cooldownKey(masked)).catch(() => 0);
-        cooldownSeconds = Math.max(0, ttl);
-        cooldownReason = cooldownVal.split(':')[0]; // e.g. "429" or "5xx"
-      }
+  // Map MGET response back to keys and query TTLs only for keys currently cooling down
+  const ttlPromises: Promise<number>[] = [];
+  const rawKeyData = maskedKeys.map((masked, idx) => {
+    const cooldownVal = mgetValues[idx * 3] ?? null;
+    const failures = mgetValues[idx * 3 + 1] ?? null;
+    const successes = mgetValues[idx * 3 + 2] ?? null;
 
-      return {
-        index:          idx + 1,
-        masked,
-        available:      cooldownSeconds === 0,
-        cooldownSeconds,
-        cooldownReason,
-        successCount:   parseInt(successes ?? '0', 10),
-        failureCount:   parseInt(failures  ?? '0', 10),
-      };
-    })
-  );
+    let getTtlPromise: Promise<number> = Promise.resolve(0);
+    if (cooldownVal !== null) {
+      getTtlPromise = redis.ttl(cooldownKey(masked)).catch(() => 0);
+    }
+    ttlPromises.push(getTtlPromise);
+
+    return { idx, masked, cooldownVal, failures, successes };
+  });
+
+  const ttlResults = await Promise.all(ttlPromises);
+
+  const statuses: KeyStatus[] = rawKeyData.map(({ idx, masked, cooldownVal, failures, successes }, i) => {
+    let cooldownSeconds = 0;
+    let cooldownReason: string | null = null;
+
+    if (cooldownVal !== null) {
+      cooldownSeconds = Math.max(0, ttlResults[i]);
+      cooldownReason = cooldownVal.split(':')[0]; // e.g. "429" or "5xx"
+    }
+
+    return {
+      index:          idx + 1,
+      masked,
+      available:      cooldownSeconds === 0,
+      cooldownSeconds,
+      cooldownReason,
+      successCount:   parseInt(successes ?? '0', 10),
+      failureCount:   parseInt(failures  ?? '0', 10),
+    };
+  });
 
   const availableCount = statuses.filter((s) => s.available).length;
   const allCoolingDown = availableCount === 0 && keys.length > 0;

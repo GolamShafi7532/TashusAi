@@ -1,31 +1,34 @@
 'use strict';
 'use client';
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useCallback } from 'react';
 import Link from 'next/link';
 import { apiFetch } from '@/lib/apiFetch';
 import { usePathname, useRouter } from 'next/navigation';
+import { useVisibilityInterval } from '@/hooks/useVisibilityInterval';
 
 // Token bucket cooldown alert component
 function TokenCooldownAlert() {
   const [status, setStatus] = useState<any>(null);
   const [show, setShow] = useState(false);
 
-  useEffect(() => {
-    const fetch_ = async () => {
-      try {
-        const res = await apiFetch('/api/admin/token-bucket');
-        if (res.ok) {
-          const data = await res.json();
-          setStatus(data);
-          setShow(data.allCoolingDown);
-        }
-      } catch {}
-    };
-    fetch_();
-    const interval = setInterval(fetch_, 20000);
-    return () => clearInterval(interval);
+  const fetch_ = useCallback(async () => {
+    try {
+      const res = await apiFetch('/api/admin/token-bucket');
+      if (res.ok) {
+        const data = await res.json();
+        setStatus(data);
+        setShow(data.allCoolingDown);
+      }
+    } catch {}
   }, []);
+
+  useEffect(() => {
+    fetch_();
+  }, [fetch_]);
+
+  // Poll status every 60s when active, pause when tab is hidden
+  useVisibilityInterval(fetch_, 60000);
 
   if (!show || !status?.allCoolingDown) return null;
 

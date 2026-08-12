@@ -115,34 +115,56 @@ export const metrics = {
     let promptTotal = 0, completionTotal = 0, totalCostUsd = 0;
     const providerBreakdown: Record<string, number> = {};
 
+    // Pipeline all Redis hgetall queries into a single network round-trip
+    const pipe = redis.pipeline();
     for (const day of dates) {
-      const [tokens, costs] = await Promise.all([
-        redis.hgetall(`metrics:tokens:${day}`).catch(() => null),
-        redis.hgetall(`metrics:costs:${day}`).catch(() => null),
-      ]);
+      pipe.hgetall(`metrics:tokens:${day}`);
+      pipe.hgetall(`metrics:costs:${day}`);
+    }
+    pipe.hgetall('metrics:counters');
 
-      for (const [key, val] of Object.entries(tokens ?? {})) {
-        const n = parseInt(val, 10) || 0;
-        if (key.endsWith(':prompt'))     promptTotal     += n;
-        if (key.endsWith(':completion')) completionTotal += n;
+    const results = await pipe.exec().catch(() => null);
+
+    if (results) {
+      let idx = 0;
+      for (let i = 0; i < dates.length; i++) {
+        const tokensResult = results[idx++];
+        const costsResult = results[idx++];
+
+        const tokens = (tokensResult && !tokensResult[0]) ? (tokensResult[1] as Record<string, string>) : {};
+        const costs = (costsResult && !costsResult[0]) ? (costsResult[1] as Record<string, string>) : {};
+
+        for (const [key, val] of Object.entries(tokens ?? {})) {
+          const n = parseInt(val, 10) || 0;
+          if (key.endsWith(':prompt'))     promptTotal     += n;
+          if (key.endsWith(':completion')) completionTotal += n;
+        }
+
+        for (const [provider, cost] of Object.entries(costs ?? {})) {
+          const c = parseFloat(cost) || 0;
+          totalCostUsd             += c;
+          providerBreakdown[provider] = (providerBreakdown[provider] ?? 0) + c;
+        }
       }
 
-      for (const [provider, cost] of Object.entries(costs ?? {})) {
-        const c = parseFloat(cost) || 0;
-        totalCostUsd             += c;
-        providerBreakdown[provider] = (providerBreakdown[provider] ?? 0) + c;
-      }
+      const countersResult = results[idx];
+      const requestCounts = (countersResult && !countersResult[0]) ? (countersResult[1] as Record<string, string>) : {};
+
+      return {
+        totalTokens:      { prompt: promptTotal, completion: completionTotal },
+        totalCostUsd:     Math.round(totalCostUsd * 10000) / 10000,
+        providerBreakdown,
+        requestCounts:    Object.fromEntries(
+          Object.entries(requestCounts).map(([k, v]) => [k, parseInt(v, 10) || 0])
+        ),
+      };
     }
 
-    const requestCounts = (await redis.hgetall('metrics:counters').catch(() => null)) ?? {};
-
     return {
-      totalTokens:      { prompt: promptTotal, completion: completionTotal },
-      totalCostUsd:     Math.round(totalCostUsd * 10000) / 10000,
-      providerBreakdown,
-      requestCounts:    Object.fromEntries(
-        Object.entries(requestCounts).map(([k, v]) => [k, parseInt(v, 10) || 0])
-      ),
+      totalTokens:      { prompt: 0, completion: 0 },
+      totalCostUsd:     0,
+      providerBreakdown: {},
+      requestCounts:    {},
     };
   },
 };

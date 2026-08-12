@@ -3,6 +3,7 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import { useVisibilityInterval } from '@/hooks/useVisibilityInterval';
 // ── Small reusable components ─────────────────────────────────────────────────
 
 function MetricCard({
@@ -202,9 +203,10 @@ export default function AnalyticsPage() {
   useEffect(() => {
     fetchOverview();
     fetchTokenUsage();
-    const interval = setInterval(fetchOverview, 30_000);
-    return () => clearInterval(interval);
   }, [fetchOverview, fetchTokenUsage]);
+
+  // Refresh overview every 120s when active, pause when tab is hidden
+  useVisibilityInterval(fetchOverview, 120000);
 
   const fmtCost  = (n: number) => `$${n.toFixed(4)}`;
   const fmtTokens = (n: number) => n >= 1000 ? `${(n / 1000).toFixed(1)}K` : String(n);

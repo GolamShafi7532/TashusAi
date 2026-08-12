@@ -2,6 +2,7 @@
 
 import React, { useState, useEffect, useRef, useCallback } from 'react';
 import { apiFetch } from '@/lib/apiFetch';
+import { useVisibilityInterval } from '@/hooks/useVisibilityInterval';
 
 // ═══════════════════════════════════════════════════════════════════════════
 // TYPES
@@ -92,6 +93,14 @@ export default function SessionsPage() {
         fetchSessions(true); // Silent refresh
       });
 
+      es.addEventListener('message', () => {
+        fetchSessions(true);
+      });
+
+      es.addEventListener('session_updated', () => {
+        fetchSessions(true);
+      });
+
       es.onerror = () => {
         es.close();
         retryTimerRef.current = setTimeout(connect, 5000);
@@ -106,11 +115,12 @@ export default function SessionsPage() {
     };
   }, [fetchSessions]);
 
-  // ── Auto-refresh every 10 seconds ──────────────────────────────────────────
-  useEffect(() => {
-    const interval = setInterval(() => fetchSessions(true), 10000);
-    return () => clearInterval(interval);
+  // ── Auto-refresh sessions list when tab is active (every 20s) ──────────────
+  const handlePollSessions = useCallback(() => {
+    fetchSessions(true);
   }, [fetchSessions]);
+
+  useVisibilityInterval(handlePollSessions, 20000);
 
   // ── Initial load and tab change ────────────────────────────────────────────
   useEffect(() => {
@@ -330,9 +340,10 @@ function InlineChatPanel({ sessionId, onClose, onUpdate }: {
 
   useEffect(() => {
     fetchDetail();
-    const interval = setInterval(fetchDetail, 3000); // Poll every 3s
-    return () => clearInterval(interval);
   }, [fetchDetail]);
+
+  // Poll detail every 10s when active, pause when tab is hidden
+  useVisibilityInterval(fetchDetail, 10000);
 
   useEffect(() => {
     messagesEndRef.current?.scrollIntoView({ behavior: 'smooth' });
